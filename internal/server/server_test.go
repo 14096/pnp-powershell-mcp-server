@@ -1,0 +1,152 @@
+package server
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/14096/pnp-powershell-mcp-server/internal/catalog"
+	"github.com/14096/pnp-powershell-mcp-server/internal/docs"
+	"github.com/14096/pnp-powershell-mcp-server/internal/pwsh"
+)
+
+type fakeRunner struct {
+	res    pwsh.Result
+	err    error
+	script string
+	env    map[string]string
+}
+
+func (f *fakeRunner) Run(_ context.Context, script string, env map[string]string, _ time.Duration) (pwsh.Result, error) {
+	f.script, f.env = script, env
+	return f.res, f.err
+}
+
+const catalogJSON = `{"version":"1.2.3","helpPath":"","commands":[
+ {"name":"Add-PnPListItem","parameters":[],"parameterSets":[]},
+ {"name":"Get-PnPList","parameters":[],"parameterSets":[]},
+ {"name":"Get-PnPTeamsChannel","parameters":[],"parameterSets":[]}]}`
+
+func newTestServer(t *testing.T, docsURL string, runner *fakeRunner) *Server {
+	t.Helper()
+	store := catalog.NewStore(&fakeRunner{res: pwsh.Result{Stdout: catalogJSON}}, filepath.Join(t.TempDir(), "c.json"))
+	if err := store.Rebuild(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	return New(runner, store, &docs.Client{BaseURL: docsURL + "/", HTTP: http.DefaultClient})
+}
+
+func text(t *testing.T, r *mcp.CallToolResult) string {
+	t.Helper()
+	return r.Content[0].(*mcp.TextContent).Text
+}
+
+func TestCmdletNameRegex(t *testing.T) {
+	for _, s := range []string{"Get-PnPList", "get-pnplist", "Connect-PnPOnline"} {
+		if !cmdletNameRe.MatchString(s) {
+			t.Errorf("%q should match", s)
+		}
+	}
+	for _, s := range []string{"Get-Process", "Get-PnPList; rm -rf /", "../Get-PnPList", "Get-PnP", ""} {
+		if cmdletNameRe.MatchString(s) {
+			t.Errorf("%q should not match", s)
+		}
+	}
+}
+
+func TestGetCmdletDocs(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("DOC BODY")) }))
+	defer ts.Close()
+	s := newTestServer(t, ts.URL, &fakeRunner{})
+	ctx := context.Background()
+
+	r, _, _ := s.getCmdletDocs(ctx, nil, docsArgs{Cmdlet: "Get-Process"})
+	if !r.IsError {
+		t.Error("invalid name should error")
+	}
+	r, _, _ = s.getCmdletDocs(ctx, nil, docsArgs{Cmdlet: "Get-PnPNope"})
+	if !r.IsError || !strings.Contains(text(t, r), "does not exist") {
+		t.Errorf("unknown cmdlet: %s", text(t, r))
+	}
+	r, _, _ = s.getCmdletDocs(ctx, nil, docsArgs{Cmdlet: "get-pnplist"})
+	if r.IsError || !strings.Contains(text(t, r), "DOC BODY") || !strings.Contains(text(t, r), "1.2.3") {
+		t.Fatalf("unexpected: %s", text(t, r))
+	}
+	if got := s.undocumented("Get-PnPList"); len(got) != 0 {
+		t.Errorf("cmdlet should be marked consulted, still undocumented: %v", got)
+	}
+}
+
+func TestGetCmdletDocsFallsBackToLocalHelp(t *testing.T) {
+	ts := httptest.NewServer(http.NotFoundHandler())
+	defer ts.Close()
+	runner := &fakeRunner{res: pwsh.Result{Stdout: "LOCAL HELP"}}
+	s := newTestServer(t, ts.URL, runner)
+
+	r, _, _ := s.getCmdletDocs(context.Background(), nil, docsArgs{Cmdlet: "Get-PnPList"})
+	if r.IsError || !strings.Contains(text(t, r), "LOCAL HELP") {
+		t.Fatalf("unexpected: %s", text(t, r))
+	}
+	if runner.env[pwsh.EnvCmdlet] != "Get-PnPList" {
+		t.Errorf("cmdlet not passed via env: %v", runner.env)
+	}
+}
+
+func TestSearchCmdlets(t *testing.T) {
+	s := newTestServer(t, "", &fakeRunner{})
+	r, _, _ := s.searchCmdlets(context.Background(), nil, searchArgs{Query: "teams"})
+	out := text(t, r)
+	if r.IsError || !strings.Contains(out, "Get-PnPTeamsChannel") || strings.Contains(out, "Get-PnPList:") {
+		t.Errorf("unexpected: %s", out)
+	}
+}
+
+func TestModuleInfo(t *testing.T) {
+	s := newTestServer(t, "", &fakeRunner{})
+	r, _, _ := s.moduleInfo(context.Background(), nil, struct{}{})
+	if out := text(t, r); !strings.Contains(out, `"installedVersion": "1.2.3"`) || !strings.Contains(out, `"cmdletCount": 3`) {
+		t.Errorf("unexpected: %s", out)
+	}
+}
+
+func TestRunCmdlet(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("empty expression", func(t *testing.T) {
+		s := newTestServer(t, "", &fakeRunner{})
+		if r, _, _ := s.runCmdlet(ctx, nil, runArgs{Expression: "  "}); !r.IsError {
+			t.Error("expected error")
+		}
+	})
+	t.Run("success passes expression via env and notes missing docs", func(t *testing.T) {
+		runner := &fakeRunner{res: pwsh.Result{Stdout: "[]\n"}}
+		s := newTestServer(t, "", runner)
+		r, _, _ := s.runCmdlet(ctx, nil, runArgs{Expression: "Get-PnPList"})
+		if r.IsError || !strings.Contains(text(t, r), "Docs not consulted") {
+			t.Errorf("unexpected: %s", text(t, r))
+		}
+		if runner.env[pwsh.EnvExpression] != "Get-PnPList" {
+			t.Errorf("env = %v", runner.env)
+		}
+	})
+	t.Run("connection error is prettified", func(t *testing.T) {
+		runner := &fakeRunner{res: pwsh.Result{ExitCode: 1, Stderr: "Error ID: X\nDetails: You are not signed in. Please use Connect-PnPOnline to connect."}}
+		s := newTestServer(t, "", runner)
+		r, _, _ := s.runCmdlet(ctx, nil, runArgs{Expression: "1"})
+		if !r.IsError || !strings.Contains(text(t, r), "Not connected") {
+			t.Errorf("unexpected: %s", text(t, r))
+		}
+	})
+	t.Run("runner failure", func(t *testing.T) {
+		s := newTestServer(t, "", &fakeRunner{err: context.DeadlineExceeded})
+		if r, _, _ := s.runCmdlet(ctx, nil, runArgs{Expression: "1"}); !r.IsError {
+			t.Error("expected error")
+		}
+	})
+}
