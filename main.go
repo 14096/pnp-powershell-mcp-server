@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
-	"log"
+	"flag"
+	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
+	"syscall"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -14,25 +17,53 @@ import (
 	"github.com/14096/pnp-powershell-mcp-server/internal/server"
 )
 
-// version is overridden at build time via -ldflags "-X main.version=...".
 var version = "dev"
 
 func main() {
-	log.SetOutput(os.Stderr)
 	if err := run(); err != nil {
-		log.Fatal(err)
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
 	}
 }
 
 func run() error {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	elicitation := flag.Bool("elicitation", false, "confirm risky operations through the client's native prompt (only for clients that show MCP prompts reliably); default is confirmation in the conversation")
+	debug := flag.Bool("debug", false, "verbose logging to stderr (includes executed expressions)")
+	showVersion := flag.Bool("version", false, "print the version and exit")
+	flag.Parse()
+	if *showVersion {
+		fmt.Println(version)
+		return nil
+	}
+
+	level := slog.LevelInfo
+	if *debug {
+		level = slog.LevelDebug
+	}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	runner := pwsh.Exec{}
+	go func() {
+		if d := pwsh.Diagnose(ctx, runner); !d.OK() {
+			for _, p := range d.Problems {
+				logger.Warn("prerequisite problem", "problem", p)
+			}
+		} else {
+			logger.Info("environment ok", "powershell", d.PSVersion, "pnpPowerShell", d.ModuleVersion)
+		}
+	}()
+
 	store := catalog.NewStore(runner, catalog.DefaultCacheFile())
-	if err := store.Load(ctx); err != nil {
-		log.Printf("warning: catalog not loaded: %v", err)
+	store.Start(ctx)
+
+	opts := []server.Option{server.WithLogger(logger)}
+	if *elicitation {
+		opts = append(opts, server.WithElicitation())
 	}
-	srv := server.New(runner, store, docs.NewClient())
+	srv := server.New(runner, store, docs.NewClient(docs.DefaultCacheDir()), opts...)
+	logger.Info("starting", "version", version, "elicitation", *elicitation)
 	return srv.MCP(version).Run(ctx, &mcp.StdioTransport{})
 }

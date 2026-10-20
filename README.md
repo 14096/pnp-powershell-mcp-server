@@ -176,13 +176,13 @@ npx @modelcontextprotocol/inspector ./bin/pnp-powershell-mcp-server
 
 ## Tools
 
-| Tool                | Purpose                                                                             |
-| ------------------- | ----------------------------------------------------------------------------------- |
-| `pnpSearchCmdlets`  | Keyword search over installed cmdlets                                               |
-| `pnpGetCmdletDocs`  | Current docs for a cmdlet (online, falls back to local `Get-Help`)                  |
-| `pnpRunCmdlet`      | Run an expression in a fresh `pwsh`; cmdlet and parameter names are validated first |
-| `pnpRefreshCmdlets` | Rebuild the catalog; `update: true` installs the latest module first                |
-| `pnpGetModuleInfo`  | Installed version, catalog status                                                   |
+| Tool                | Purpose                                                                                              |
+| ------------------- | ---------------------------------------------------------------------------------------------------- |
+| `pnpSearchCmdlets`  | Keyword search over installed cmdlets                                                                |
+| `pnpGetCmdletDocs`  | Current docs for a cmdlet (online, falls back to local `Get-Help`)                                   |
+| `pnpRunCmdlet`      | Run an expression in a fresh `pwsh`; names are validated and risky operations need your confirmation |
+| `pnpRefreshCmdlets` | Rebuild the catalog; `update: true` installs the latest module first                                 |
+| `pnpGetModuleInfo`  | Installed version, catalog status                                                                    |
 
 Recommended flow: search -> docs -> run.
 
@@ -192,18 +192,70 @@ rejects unknown `*-PnP*` cmdlets and parameters. The expression is passed via an
 environment variable, never interpolated into a script. If a cmdlet's docs were
 not fetched in the session, the result carries a note.
 
-## Security
+## Security and confirmation of risky operations
 
-`pnpRunCmdlet` executes the given PowerShell expression with your user's
-privileges and the permissions of your `Connect-PnPOnline` session. Validation
-covers PnP cmdlets only; other PowerShell commands (e.g. `Remove-Item`) are not
-blocked. Treat it like giving the assistant a shell:
+`pnpRunCmdlet` executes PowerShell with your user's privileges and the
+permissions of your `Connect-PnPOnline` session. Before running anything, the
+expression is analysed and **risky operations require your confirmation**. No
+configuration or environment variable is needed; the confirmation happens in the
+conversation.
+
+What counts as risky:
+
+- Destructive verbs: `Remove-*`, `Clear-*`, `Reset-*`, `Revoke-*`, `Unpublish-*`,
+  `Uninstall-*`, `Unregister-*`, `Disable-*`, `Deny-*`, `Stop-*`, `Restart-*`, `Format-*`
+  (aliases like `rm`/`del` are resolved)
+- Write calls through `Invoke-PnPSPRestMethod` / `Invoke-PnPGraphMethod`
+  (any `-Method` other than `Get`) and `Invoke-PnPBatch`
+- Method calls such as `.Delete()`, `.DeleteObject()`, `.Recycle()`
+- Arbitrary code or side effects: `Invoke-Expression`, `Invoke-Command`,
+  `Start-Process`, `Invoke-WebRequest`, `Invoke-RestMethod`, file writes,
+  external programs, and dynamic invocation like `& $cmd`
+
+How confirmation works:
+
+1. The call returns without executing anything and lists exactly what would happen.
+2. **Default - confirmation in the conversation (works in every client):** the
+   assistant is told to show you the operations and ask for an explicit yes/no.
+   Only after you say yes does it retry with a single-use, 5-minute token bound
+   to that exact expression. This relies on the assistant following its
+   instructions, so also keep your client's own tool approval enabled for
+   `pnpRunCmdlet`.
+3. **Optional - native client prompt:** start the server with `--elicitation` and
+   clients that support MCP elicitation show a confirmation dialog themselves,
+   which the model cannot answer. It is off by default because some clients
+   (OpenCode, for example) accept the request but only display the dialog later,
+   such as after a restart, which leaves the call stuck. Enable it only for
+   clients where it works (add `"--elicitation"` to the command arguments). If a
+   prompt goes unanswered for 45 s, the server falls back to the conversation.
+
+Declined requests never reach PowerShell. Read-only expressions run without any prompt.
+
+This is a safety net, not a sandbox: static analysis cannot catch everything
+(for example code hidden inside strings or scripts). Also:
 
 - Use an Entra ID app with least-privilege permissions.
-- Review or require approval of tool calls in your client, especially `Remove-*`.
 - Don't run it against production tenants unattended.
 
-Please report vulnerabilities privately via GitHub Security Advisories on this repository.
+## Output and performance
+
+- **Compact output:** valid JSON (for example from `ConvertTo-Json`) is compacted
+  before it is returned, which saves tokens.
+- **Size limit:** output over `maxChars` (default 30,000, max 200,000; set per
+  call) is truncated with a notice. JSON arrays are cut at item boundaries, so
+  the result stays valid JSON, and the notice says how many items were shown
+  (`Showing 120 of 4,300 items`) and how to narrow the query (`-First`,
+  `-Query`, `Select-Object`). Capture is also capped at 16 MB per command.
+- **Docs cache:** documentation pages are cached on disk
+  (`~/.cache/pnp-powershell-mcp-server/docs/<module version>/`) for 24 hours and
+  re-fetched after a module update. If you are offline, stale cached pages are
+  still served.
+- **Instant start:** the server answers immediately and loads or rebuilds the
+  cmdlet catalog in the background (a first-ever start takes ~4 s to build it;
+  tools that need the catalog wait for it).
+- **Fresh process per call:** each call starts a new `pwsh` (about 0.8 s
+  including the module import). This is deliberate: no state leaks between calls
+  and a hung command can be killed cleanly, so a persistent session is not used.
 
 ## Authentication
 

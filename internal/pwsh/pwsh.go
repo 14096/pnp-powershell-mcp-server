@@ -25,18 +25,44 @@ var (
 	HelpScript string
 	//go:embed scripts/version.ps1
 	VersionScript string
+	//go:embed scripts/check.ps1
+	CheckScript string
 )
 
 const (
 	EnvExpression = "PNP_MCP_EXPR"
 	EnvCmdlet     = "PNP_MCP_CMDLET"
+	EnvConfirmed  = "PNP_MCP_CONFIRMED"
 )
 
+const ExitConfirmationRequired = 3
+
 type Result struct {
-	Stdout   string
-	Stderr   string
-	ExitCode int
+	Stdout    string
+	Stderr    string
+	ExitCode  int
+	Truncated bool
 }
+
+const MaxCapture = 16 << 20
+
+type cappedBuffer struct {
+	bytes.Buffer
+	truncated bool
+}
+
+func (b *cappedBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+	if room := MaxCapture - b.Len(); n > room {
+		b.truncated = true
+		p = p[:room]
+	}
+	_, _ = b.Buffer.Write(p)
+	return n, nil
+}
+
+// ErrNotFound means the pwsh executable is not installed or not in PATH.
+var ErrNotFound = errors.New("PowerShell 7+ (pwsh) was not found in PATH")
 
 type Runner interface {
 	Run(ctx context.Context, script string, env map[string]string, timeout time.Duration) (Result, error)
@@ -53,20 +79,26 @@ func (Exec) Run(ctx context.Context, script string, env map[string]string, timeo
 	for k, v := range env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
-	var stdout, stderr bytes.Buffer
+	var stdout, stderr cappedBuffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	configure(cmd)
 
 	err := cmd.Run()
-	res := Result{Stdout: stdout.String(), Stderr: stderr.String()}
+	res := Result{Stdout: stdout.String(), Stderr: stderr.String(), Truncated: stdout.truncated}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return res, fmt.Errorf("PowerShell timed out after %s", timeout)
+	}
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return res, fmt.Errorf("PowerShell run was cancelled: %w", ctx.Err())
 	}
 	var exitErr *exec.ExitError
 	switch {
 	case errors.As(err, &exitErr):
 		res.ExitCode = exitErr.ExitCode()
+	case errors.Is(err, exec.ErrNotFound):
+		return res, fmt.Errorf("%w: %v", ErrNotFound, err)
 	case err != nil:
-		return res, fmt.Errorf("cannot run pwsh (is PowerShell 7+ in PATH?): %w", err)
+		return res, fmt.Errorf("cannot run pwsh: %w", err)
 	}
 	return res, nil
 }

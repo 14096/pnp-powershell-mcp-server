@@ -106,6 +106,11 @@ For structured output, use one of:
   Get-PnPSite | Format-Table Title, Url -AutoSize
   ```
 
+Large results are truncated (default 30,000 characters; raise `maxChars` up to
+200,000). Prefer narrowing the query on the server: `-Identity`, `-Query`,
+`-First`/`-PageSize`, and `Select-Object` for only the properties you need.
+Valid JSON output is compacted automatically.
+
 Avoid using `-Verbose`, `-Debug`, or `-Information` flags in automated expressions
 as they add noise to the output stream.
 
@@ -122,8 +127,14 @@ as they add noise to the output stream.
 - **Token cache location** — the PnP token cache is stored in the user's profile.
   On shared machines, ensure the profile is appropriately access-controlled.
 - **Avoid destructive operations without confirmation** — cmdlets such as
-  `Remove-PnPList`, `Remove-PnPSite`, etc. are irreversible. Always verify
-  the target before executing.
+  `Remove-PnPList`, `Remove-PnPSite`, etc. are irreversible. `pnpRunCmdlet`
+  never runs them (or other risky operations such as `Invoke-Expression`,
+  write calls via `Invoke-PnPSPRestMethod -Method Delete`, `.DeleteObject()`)
+  without the user's explicit confirmation. If you get
+  `[CONFIRMATION REQUIRED]`, show the user exactly what will happen, ask for a
+  clear yes/no, and only then retry with the same expression and the returned
+  `confirmationToken`. Never ask for or reuse a token without asking the user.
+  Always verify the target before executing.
 
 ---
 

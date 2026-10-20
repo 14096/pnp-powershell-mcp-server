@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -21,10 +22,14 @@ type fakeRunner struct {
 	err    error
 	script string
 	env    map[string]string
+	fn     func(env map[string]string) pwsh.Result
 }
 
 func (f *fakeRunner) Run(_ context.Context, script string, env map[string]string, _ time.Duration) (pwsh.Result, error) {
 	f.script, f.env = script, env
+	if f.fn != nil {
+		return f.fn(env), f.err
+	}
 	return f.res, f.err
 }
 
@@ -39,7 +44,7 @@ func newTestServer(t *testing.T, docsURL string, runner *fakeRunner) *Server {
 	if err := store.Rebuild(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	return New(runner, store, &docs.Client{BaseURL: docsURL + "/", HTTP: http.DefaultClient})
+	return New(runner, store, &docs.Client{BaseURL: docsURL + "/", HTTP: http.DefaultClient, CacheDir: t.TempDir(), TTL: time.Hour})
 }
 
 func text(t *testing.T, r *mcp.CallToolResult) string {
@@ -149,4 +154,65 @@ func TestRunCmdlet(t *testing.T) {
 			t.Error("expected error")
 		}
 	})
+}
+
+func TestRunCmdletTruncatesLargeOutput(t *testing.T) {
+	big := "[" + strings.Repeat(`{"Title":"abcdefghij"},`, 500) + `{"Title":"z"}]`
+	s := newTestServer(t, "", &fakeRunner{res: pwsh.Result{Stdout: big}})
+
+	r, _, _ := s.runCmdlet(context.Background(), nil, runArgs{Expression: "Get-Date", MaxChars: 2000})
+	out := text(t, r)
+	if r.IsError || len(out) > 2000+600 || !strings.Contains(out, "[TRUNCATED] Showing") || !strings.Contains(out, "of 501 items") {
+		t.Errorf("unexpected (len %d): %.300s", len(out), out)
+	}
+	r, _, _ = s.runCmdlet(context.Background(), nil, runArgs{Expression: "Get-Date", MaxChars: 200000})
+	if strings.Contains(text(t, r), "TRUNCATED") {
+		t.Error("output within the limit must not be truncated")
+	}
+}
+
+func TestGuardRecoversFromPanic(t *testing.T) {
+	s := newTestServer(t, "", &fakeRunner{})
+	boom := func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, any, error) {
+		panic("kaboom")
+	}
+	r, _, err := guard(s, "boomTool", boom)(context.Background(), nil, struct{}{})
+	if err != nil || r == nil || !r.IsError || !strings.Contains(text(t, r), "internal error in boomTool") {
+		t.Fatalf("unexpected: %v %v", r, err)
+	}
+}
+
+func TestExecFailureMessages(t *testing.T) {
+	s := newTestServer(t, "", &fakeRunner{})
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"pwsh missing", fmt.Errorf("%w: x", pwsh.ErrNotFound), "https://learn.microsoft.com/powershell"},
+		{"timeout", fmt.Errorf("PowerShell timed out after 2s"), "raise timeoutSec"},
+		{"other", fmt.Errorf("weird"), "weird"},
+	}
+	for _, tt := range tests {
+		s.runner = &fakeRunner{err: tt.err}
+		r, _, _ := s.runCmdlet(context.Background(), nil, runArgs{Expression: "Get-Date"})
+		if !r.IsError || !strings.Contains(text(t, r), tt.want) {
+			t.Errorf("%s: got %q, want %q", tt.name, text(t, r), tt.want)
+		}
+	}
+}
+
+func TestModuleInfoReportsProblems(t *testing.T) {
+	s := newTestServer(t, "", &fakeRunner{err: fmt.Errorf("%w: x", pwsh.ErrNotFound)})
+	r, _, _ := s.moduleInfo(context.Background(), nil, struct{}{})
+	out := text(t, r)
+	if !strings.Contains(out, `"healthy": false`) || !strings.Contains(out, "not found in PATH") || !strings.Contains(out, `"installedVersion": "1.2.3"`) {
+		t.Errorf("unexpected: %s", out)
+	}
+
+	s = newTestServer(t, "", &fakeRunner{res: pwsh.Result{Stdout: `{"psVersion":"7.6.4","moduleVersion":"3.4.1"}`}})
+	r, _, _ = s.moduleInfo(context.Background(), nil, struct{}{})
+	if out := text(t, r); !strings.Contains(out, `"healthy": true`) || !strings.Contains(out, `"powershellVersion": "7.6.4"`) {
+		t.Errorf("unexpected: %s", out)
+	}
 }

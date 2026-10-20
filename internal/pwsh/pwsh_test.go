@@ -56,3 +56,55 @@ func TestRunScriptValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestRunScriptRiskDetection(t *testing.T) {
+	if _, err := exec.LookPath("pwsh"); err != nil {
+		t.Skip("pwsh not available")
+	}
+	ctx := context.Background()
+	if r, err := (Exec{}).Run(ctx, VersionScript, nil, time.Minute); err != nil || r.ExitCode != 0 {
+		t.Skip("PnP.PowerShell not installed")
+	}
+	risky := []string{
+		"Remove-PnPList -Identity x",
+		"Get-PnPList | ForEach-Object { Remove-PnPList $_ }",
+		"Clear-PnPRecycleBinItem -All",
+		"Invoke-PnPSPRestMethod -Url /x -Method Delete",
+		"Invoke-Expression 'Get-Date'",
+		"iex 'Get-Date'",
+		"Invoke-WebRequest http://example.com",
+		"& $cmd",
+		"$item.DeleteObject()",
+	}
+	safe := []string{"Get-Date", "'x' | ConvertTo-Json", "Get-PnPList -Identity x -ErrorAction SilentlyContinue"}
+
+	for _, expr := range risky {
+		r, err := (Exec{}).Run(ctx, RunScript, map[string]string{EnvExpression: expr}, time.Minute)
+		if err != nil || r.ExitCode != ExitConfirmationRequired || !strings.Contains(r.Stdout, "confirmationRequired") {
+			t.Errorf("%q should require confirmation: exit=%d err=%v out=%q", expr, r.ExitCode, err, r.Stdout)
+		}
+	}
+	for _, expr := range safe {
+		r, _ := (Exec{}).Run(ctx, RunScript, map[string]string{EnvExpression: expr}, time.Minute)
+		if r.ExitCode == ExitConfirmationRequired {
+			t.Errorf("%q should not require confirmation: %q", expr, r.Stdout)
+		}
+	}
+	r, _ := (Exec{}).Run(ctx, RunScript, map[string]string{EnvExpression: "Remove-PnPList -Identity x", EnvConfirmed: "1"}, time.Minute)
+	if r.ExitCode == ExitConfirmationRequired {
+		t.Error("confirmed expression must pass the guard")
+	}
+}
+
+func TestCappedBuffer(t *testing.T) {
+	var b cappedBuffer
+	chunk := make([]byte, MaxCapture/2+1)
+	for i := range 3 {
+		if n, err := b.Write(chunk); n != len(chunk) || err != nil {
+			t.Fatalf("write %d: n=%d err=%v", i, n, err)
+		}
+	}
+	if b.Len() != MaxCapture || !b.truncated {
+		t.Errorf("len=%d truncated=%v", b.Len(), b.truncated)
+	}
+}

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -35,11 +36,13 @@ func result(text string, isError bool) (*mcp.CallToolResult, any, error) {
 }
 
 type runArgs struct {
-	Expression string `json:"expression" jsonschema:"PowerShell expression using PnP.PowerShell cmdlets, e.g. Get-PnPList | Select-Object Title,Id | ConvertTo-Json"`
-	TimeoutSec int    `json:"timeoutSec,omitempty" jsonschema:"timeout in seconds (default 120, max 900)"`
+	Expression        string `json:"expression" jsonschema:"PowerShell expression using PnP.PowerShell cmdlets, e.g. Get-PnPList | Select-Object Title,Id | ConvertTo-Json"`
+	TimeoutSec        int    `json:"timeoutSec,omitempty" jsonschema:"timeout in seconds (default 120, max 900)"`
+	MaxChars          int    `json:"maxChars,omitempty" jsonschema:"max characters of output to return (default 30000, max 200000); longer output is truncated with a notice"`
+	ConfirmationToken string `json:"confirmationToken,omitempty" jsonschema:"token from a previous [CONFIRMATION REQUIRED] response; only pass it after the user explicitly approved"`
 }
 
-func (s *Server) runCmdlet(ctx context.Context, _ *mcp.CallToolRequest, a runArgs) (*mcp.CallToolResult, any, error) {
+func (s *Server) runCmdlet(ctx context.Context, req *mcp.CallToolRequest, a runArgs) (*mcp.CallToolResult, any, error) {
 	if strings.TrimSpace(a.Expression) == "" {
 		return fail("expression is required")
 	}
@@ -49,9 +52,45 @@ func (s *Server) runCmdlet(ctx context.Context, _ *mcp.CallToolRequest, a runArg
 	}
 	timeout = min(timeout, maxTimeout)
 
-	res, err := s.runner.Run(ctx, pwsh.RunScript, map[string]string{pwsh.EnvExpression: a.Expression}, timeout)
+	answer := s.userDecision(req, a.Expression)
+	if answer == declined {
+		return result("[CANCELLED] The user declined. Nothing was executed.", true)
+	}
+	confirmed := answer == approved || (a.ConfirmationToken != "" && s.tokens.redeem(a.ConfirmationToken, a.Expression))
+	s.log.Debug("running expression", "expression", a.Expression, "confirmed", confirmed, "timeout", timeout)
+	res, err := s.exec(ctx, a.Expression, confirmed, timeout)
 	if err != nil {
-		return fail("%v", err)
+		return s.execFailure(err, timeout)
+	}
+
+	if res.ExitCode == pwsh.ExitConfirmationRequired {
+		creq, perr := parseConfirmationRequest(res.Stdout)
+		if perr != nil || len(creq.Actions) == 0 {
+			return fail("could not interpret the confirmation request: %v", perr)
+		}
+		summary := describe(creq.Actions)
+		if s.canElicit(req) && !s.elicitationDisabled(req) {
+			if s.useMultiRoundTrip(req) {
+				return &mcp.CallToolResult{
+					InputRequests: mcp.InputRequestMap{elicitKey: confirmationPrompt(summary, a.Expression)},
+					RequestState:  s.sign(a.Expression),
+				}, nil, nil
+			}
+			switch s.askUser(ctx, req, confirmationPrompt(summary, a.Expression)) {
+			case declined:
+				return result("[CANCELLED] The user declined. Nothing was executed.", true)
+			case approved:
+				if res, err = s.exec(ctx, a.Expression, true, timeout); err != nil {
+					return s.execFailure(err, timeout)
+				}
+			}
+		}
+		if res.ExitCode == pwsh.ExitConfirmationRequired {
+			return ok(fmt.Sprintf("[CONFIRMATION REQUIRED] Nothing was executed. This expression contains risky operations:\n%s\n\n"+
+				"Show this to the user and ask for an explicit yes/no in the conversation. Only if they clearly approve, call pnpRunCmdlet again "+
+				"with the identical expression and confirmationToken %q (valid %d minutes, single use).",
+				summary, s.tokens.issue(a.Expression), int(confirmationTTL.Minutes())))
+		}
 	}
 	missing := s.undocumented(a.Expression)
 
@@ -66,9 +105,9 @@ func (s *Server) runCmdlet(ctx context.Context, _ *mcp.CallToolRequest, a runArg
 		return result(msg, true)
 	}
 
-	out := strings.TrimSpace(res.Stdout)
-	if out == "" {
-		out = "(no output)"
+	out := formatOutput(res.Stdout, clampMaxChars(a.MaxChars))
+	if res.Truncated {
+		out += "\n\n[TRUNCATED] Output exceeded the server's capture limit and was cut. " + narrowHint
 	}
 	if len(missing) > 0 {
 		out += "\n\n[NOTE] Docs not consulted this session for: " + strings.Join(missing, ", ") +
@@ -88,7 +127,9 @@ func (s *Server) getCmdletDocs(ctx context.Context, _ *mcp.CallToolRequest, a do
 	}
 
 	var sb strings.Builder
-	if cat := s.store.Current(); cat != nil {
+	var version string
+	if cat, _ := s.store.Wait(ctx); cat != nil {
+		version = cat.Version
 		c := cat.Find(name)
 		if c == nil {
 			_, noun, _ := strings.Cut(name, "-")
@@ -102,7 +143,7 @@ func (s *Server) getCmdletDocs(ctx context.Context, _ *mcp.CallToolRequest, a do
 		fmt.Fprintf(&sb, "Module version: PnP.PowerShell %s\n", cat.Version)
 	}
 
-	md, err := s.docs.Fetch(ctx, name)
+	md, err := s.docs.Fetch(ctx, name, version)
 	if err == nil {
 		fmt.Fprintf(&sb, "Source: online docs (%s%s)\n\n%s", docs.SiteURL, name, md)
 	} else {
@@ -121,10 +162,10 @@ type searchArgs struct {
 	Limit int    `json:"limit,omitempty" jsonschema:"max results (default 20)"`
 }
 
-func (s *Server) searchCmdlets(_ context.Context, _ *mcp.CallToolRequest, a searchArgs) (*mcp.CallToolResult, any, error) {
-	cat := s.store.Current()
-	if cat == nil {
-		return fail("cmdlet catalog not available; run pnpRefreshCmdlets")
+func (s *Server) searchCmdlets(ctx context.Context, _ *mcp.CallToolRequest, a searchArgs) (*mcp.CallToolResult, any, error) {
+	cat, err := s.store.Wait(ctx)
+	if err != nil {
+		return fail("%v", err)
 	}
 	limit := a.Limit
 	if limit <= 0 {
@@ -166,18 +207,43 @@ func (s *Server) refreshCmdlets(ctx context.Context, _ *mcp.CallToolRequest, a r
 	return ok(sb.String())
 }
 
-func (s *Server) moduleInfo(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
-	c := s.store.Current()
-	if c == nil {
-		return fail("catalog not loaded")
+func (s *Server) moduleInfo(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
+	diag := pwsh.Diagnose(ctx, s.runner)
+	info := map[string]any{"powershellVersion": diag.PSVersion, "healthy": diag.OK()}
+	if len(diag.Problems) > 0 {
+		info["problems"] = diag.Problems
 	}
-	b, err := json.MarshalIndent(map[string]any{
-		"installedVersion": c.Version,
-		"cmdletCount":      len(c.Commands),
-		"catalogUpdatedAt": c.UpdatedAt,
-	}, "", "  ")
+	if c, err := s.store.Wait(ctx); err == nil {
+		info["installedVersion"] = c.Version
+		info["cmdletCount"] = len(c.Commands)
+		info["catalogUpdatedAt"] = c.UpdatedAt
+	} else {
+		info["catalogError"] = err.Error()
+	}
+	b, err := json.MarshalIndent(info, "", "  ")
 	if err != nil {
 		return fail("%v", err)
 	}
 	return ok(string(b))
+}
+
+// execFailure explains why PowerShell could not be run to completion.
+func (s *Server) execFailure(err error, timeout time.Duration) (*mcp.CallToolResult, any, error) {
+	s.log.Warn("PowerShell run failed", "error", err)
+	switch {
+	case errors.Is(err, pwsh.ErrNotFound):
+		return fail("%v.\n%s", pwsh.ErrNotFound, pwsh.InstallPwshHint)
+	case strings.Contains(err.Error(), "timed out"):
+		return fail("The command did not finish within %s and was stopped (including any processes it started). "+
+			"Narrow the query, or raise timeoutSec (max %d).", timeout, int(maxTimeout.Seconds()))
+	}
+	return fail("%v", err)
+}
+
+func (s *Server) exec(ctx context.Context, expr string, confirmed bool, timeout time.Duration) (pwsh.Result, error) {
+	env := map[string]string{pwsh.EnvExpression: expr}
+	if confirmed {
+		env[pwsh.EnvConfirmed] = "1"
+	}
+	return s.runner.Run(ctx, pwsh.RunScript, env, timeout)
 }

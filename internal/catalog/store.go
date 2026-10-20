@@ -19,12 +19,15 @@ type Store struct {
 	runner    pwsh.Runner
 	cacheFile string
 
-	mu  sync.RWMutex
-	cat *Catalog
+	mu      sync.RWMutex
+	cat     *Catalog
+	started bool
+	loadErr error
+	ready   chan struct{}
 }
 
 func NewStore(runner pwsh.Runner, cacheFile string) *Store {
-	return &Store{runner: runner, cacheFile: cacheFile}
+	return &Store{runner: runner, cacheFile: cacheFile, ready: make(chan struct{})}
 }
 
 func DefaultCacheFile() string {
@@ -45,6 +48,47 @@ func (s *Store) set(c *Catalog) {
 	s.mu.Lock()
 	s.cat = c
 	s.mu.Unlock()
+}
+
+func (s *Store) Start(ctx context.Context) {
+	if c, err := s.readCache(); err == nil {
+		s.set(c)
+	}
+	s.mu.Lock()
+	s.started = true
+	s.mu.Unlock()
+	go func() {
+		err := s.Load(ctx)
+		s.mu.Lock()
+		s.loadErr = err
+		s.mu.Unlock()
+		close(s.ready)
+	}()
+}
+
+func (s *Store) Wait(ctx context.Context) (*Catalog, error) {
+	if c := s.Current(); c != nil {
+		return c, nil
+	}
+	s.mu.RLock()
+	started := s.started
+	s.mu.RUnlock()
+	if started {
+		select {
+		case <-s.ready:
+		case <-ctx.Done():
+			return nil, fmt.Errorf("the cmdlet catalog is still being built; retry in a moment")
+		}
+		if c := s.Current(); c != nil {
+			return c, nil
+		}
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.loadErr != nil {
+		return nil, s.loadErr
+	}
+	return nil, fmt.Errorf("cmdlet catalog not available; run pnpRefreshCmdlets")
 }
 
 func (s *Store) Load(ctx context.Context) error {

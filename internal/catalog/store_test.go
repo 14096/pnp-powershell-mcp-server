@@ -50,3 +50,60 @@ func TestStoreRebuildErrors(t *testing.T) {
 		t.Fatal("expected error when pwsh fails")
 	}
 }
+
+type slowRunner struct {
+	stubRunner
+	release chan struct{}
+}
+
+func (s slowRunner) Run(ctx context.Context, script string, env map[string]string, d time.Duration) (pwsh.Result, error) {
+	if script == pwsh.CatalogScript {
+		<-s.release
+	}
+	return s.stubRunner.Run(ctx, script, env, d)
+}
+
+func TestStartDoesNotBlockAndWaitBlocksUntilBuilt(t *testing.T) {
+	release := make(chan struct{})
+	runner := slowRunner{
+		stubRunner{results: map[string]pwsh.Result{pwsh.CatalogScript: {Stdout: sample}, pwsh.VersionScript: {Stdout: "3.0.0"}}},
+		release,
+	}
+	s := NewStore(runner, filepath.Join(t.TempDir(), "c.json"))
+
+	done := make(chan struct{})
+	go func() { s.Start(context.Background()); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Start must not wait for the build")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := s.Wait(ctx); err == nil {
+		t.Fatal("Wait should give up while the build is still running")
+	}
+
+	close(release)
+	c, err := s.Wait(context.Background())
+	if err != nil || c.Version != "3.0.0" {
+		t.Fatalf("Wait = %v, %v", c, err)
+	}
+}
+
+func TestStartServesCacheImmediately(t *testing.T) {
+	cache := filepath.Join(t.TempDir(), "c.json")
+	ok := stubRunner{results: map[string]pwsh.Result{pwsh.CatalogScript: {Stdout: sample}, pwsh.VersionScript: {Stdout: "3.0.0"}}}
+	if err := NewStore(ok, cache).Rebuild(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	release := make(chan struct{})
+	s := NewStore(slowRunner{stubRunner{results: map[string]pwsh.Result{pwsh.VersionScript: {Stdout: "9.9.9"}, pwsh.CatalogScript: {Stdout: sample}}}, release}, cache)
+	s.Start(context.Background())
+	defer close(release)
+	if c, err := s.Wait(context.Background()); err != nil || c.Version != "3.0.0" {
+		t.Fatalf("cached catalog should be served immediately: %v %v", c, err)
+	}
+}
