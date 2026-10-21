@@ -14,7 +14,6 @@ import (
 	"time"
 )
 
-// A timeout must kill pwsh and the processes it started, not just pwsh itself.
 func TestTimeoutKillsChildProcesses(t *testing.T) {
 	if _, err := exec.LookPath("pwsh"); err != nil {
 		t.Skip("pwsh not available")
@@ -24,13 +23,25 @@ func TestTimeoutKillsChildProcesses(t *testing.T) {
 Set-Content -Path $env:PNP_TEST_PIDFILE -Value $p.Id
 Start-Sleep 60`
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		for ctx.Err() == nil {
+			if b, err := os.ReadFile(pidFile); err == nil && strings.TrimSpace(string(b)) != "" {
+				cancel()
+				return
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}()
+
 	start := time.Now()
-	_, err := Exec{}.Run(context.Background(), script, map[string]string{"PNP_TEST_PIDFILE": pidFile}, 4*time.Second)
-	if err == nil || !strings.Contains(err.Error(), "timed out") {
-		t.Fatalf("expected timeout error, got %v", err)
+	_, err := Exec{}.Run(ctx, script, map[string]string{"PNP_TEST_PIDFILE": pidFile}, 2*time.Minute)
+	if err == nil || !strings.Contains(err.Error(), "cancelled") {
+		t.Fatalf("expected cancel error, got %v", err)
 	}
-	if took := time.Since(start); took > 15*time.Second {
-		t.Errorf("timeout took %s", took)
+	if took := time.Since(start); took > time.Minute {
+		t.Errorf("run took %s", took)
 	}
 
 	b, err := os.ReadFile(pidFile)

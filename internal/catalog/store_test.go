@@ -70,6 +70,7 @@ func TestStartDoesNotBlockAndWaitBlocksUntilBuilt(t *testing.T) {
 		release,
 	}
 	s := NewStore(runner, filepath.Join(t.TempDir(), "c.json"))
+	t.Cleanup(func() { <-s.ready })
 
 	done := make(chan struct{})
 	go func() { s.Start(context.Background()); close(done) }()
@@ -102,6 +103,7 @@ func TestStartServesCacheImmediately(t *testing.T) {
 	release := make(chan struct{})
 	s := NewStore(slowRunner{stubRunner{results: map[string]pwsh.Result{pwsh.VersionScript: {Stdout: "9.9.9"}, pwsh.CatalogScript: {Stdout: sample}}}, release}, cache)
 	s.Start(context.Background())
+	t.Cleanup(func() { <-s.ready })
 	defer close(release)
 	if c, err := s.Wait(context.Background()); err != nil || c.Version != "3.0.0" {
 		t.Fatalf("cached catalog should be served immediately: %v %v", c, err)
