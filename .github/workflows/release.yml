@@ -30,9 +30,13 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go test ./...
+      - name: Extract release notes from CHANGELOG.md
+        run: .github/scripts/release-notes.sh "$TAG" > "$RUNNER_TEMP/release-notes.md"
+        env:
+          TAG: ${{ github.event.release.tag_name || github.event.inputs.tag || github.ref_name }}
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"
-          args: release --clean
+          args: release --clean --release-notes=${{ runner.temp }}/release-notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

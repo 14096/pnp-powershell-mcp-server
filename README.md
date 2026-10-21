@@ -1,6 +1,13 @@
 # PnP.PowerShell MCP Server
 
-An [MCP](https://modelcontextprotocol.io) server (stdio) that lets AI assistants
+<div align="center">
+  <img src="./assets/logo.png" alt="logo" width="200" height="200">
+</div>
+
+</br>
+</br>
+
+An [MCP](https://modelcontextprotocol.io) server that lets AI assistants
 run [PnP.PowerShell](https://pnp.github.io/powershell/) cmdlets against
 SharePoint and Microsoft 365.
 
@@ -16,10 +23,13 @@ See [best-practices.md](best-practices.md) for usage guidance.
 
 ## Prerequisites
 
-- Go (see `go.mod`)
+To use the server:
+
 - PowerShell 7+ (`pwsh`) in PATH
 - `Install-Module PnP.PowerShell -Scope CurrentUser`
 - An Entra ID app registration: https://pnp.github.io/powershell/articles/registerapplication.html
+
+To build from source, additionally: Go (see `go.mod`).
 
 ## Install
 
@@ -185,6 +195,15 @@ npx @modelcontextprotocol/inspector ./bin/pnp-powershell-mcp-server
 | `pnpGetModuleInfo`  | Installed version, catalog status                                                                    |
 
 Recommended flow: search -> docs -> run.
+
+Every tool also returns **structured content** with a published output schema,
+next to the text block (which is unchanged). Each result has an `ok` flag (`false`
+on errors). Highlights: `pnpSearchCmdlets` returns `results[{name, synopsis}]`;
+`pnpRunCmdlet` returns `output`, the parsed JSON in `data` when the output is
+complete valid JSON, plus `truncated`, `confirmationRequired`, `confirmationToken`,
+`cancelled` and `undocumentedCmdlets`; `pnpGetCmdletDocs` returns `markdown`,
+`source` and `moduleVersion`; `pnpGetModuleInfo` and `pnpRefreshCmdlets` return
+versions and counts.
 
 `pnpRunCmdlet` runs each expression in a fresh `pwsh` process with
 `$ErrorActionPreference = 'Stop'`. Before executing, it parses the expression and

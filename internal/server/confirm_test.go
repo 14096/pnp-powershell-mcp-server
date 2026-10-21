@@ -13,7 +13,6 @@ import (
 
 const riskyJSON = `{"confirmationRequired":true,"actions":[{"command":"Remove-PnPList","reason":"destructive operation"}]}`
 
-// guardedRunner simulates run.ps1: risky expressions exit 3 unless confirmed.
 func guardedRunner() *fakeRunner {
 	r := &fakeRunner{}
 	r.fn = func(env map[string]string) pwsh.Result {
@@ -25,7 +24,6 @@ func guardedRunner() *fakeRunner {
 	return r
 }
 
-// retry builds the request a client sends after the user answered the prompt.
 func retry(s *Server, expr, state string, action string, confirm bool) *mcp.CallToolRequest {
 	return &mcp.CallToolRequest{Params: &mcp.CallToolParamsRaw{
 		RequestState: state,
@@ -74,7 +72,7 @@ func TestDestructiveDeclined(t *testing.T) {
 	s := newTestServer(t, "", runner)
 	expr := "Remove-PnPList -Identity x"
 	r, _, _ := s.runCmdlet(context.Background(), retry(s, expr, s.sign(expr), "decline", false), runArgs{Expression: expr})
-	if !r.IsError || !strings.Contains(text(t, r), "CANCELLED") {
+	if r.IsError || !strings.Contains(text(t, r), "CANCELLED") {
 		t.Fatalf("unexpected: %s", text(t, r))
 	}
 	if runner.env != nil {
@@ -95,11 +93,9 @@ func TestDestructiveTokenFlow(t *testing.T) {
 	start := strings.Index(out, `confirmationToken "`) + len(`confirmationToken "`)
 	token := out[start : start+strings.Index(out[start:], `"`)]
 
-	// A token is bound to the exact expression.
 	if r, _, _ := s.runCmdlet(ctx, nil, runArgs{Expression: "Remove-PnPList -Identity OTHER", ConfirmationToken: token}); !strings.Contains(text(t, r), "CONFIRMATION REQUIRED") {
 		t.Errorf("token must not work for another expression: %s", text(t, r))
 	}
-	// ...and single use, so the failed attempt above already consumed it.
 	if r, _, _ := s.runCmdlet(ctx, nil, runArgs{Expression: expr, ConfirmationToken: token}); !strings.Contains(text(t, r), "CONFIRMATION REQUIRED") {
 		t.Errorf("token must be single use: %s", text(t, r))
 	}
@@ -135,7 +131,6 @@ func TestTokensExpire(t *testing.T) {
 	}
 }
 
-// directPrompt configures the older-protocol path: the server prompts the user itself.
 func directPrompt(s *Server, elicit func(context.Context, *mcp.ElicitParams) (*mcp.ElicitResult, error)) {
 	s.supportsElicit = func(*mcp.CallToolRequest) bool { return true }
 	s.multiRoundTrip = func(*mcp.CallToolRequest) bool { return false }
@@ -166,7 +161,6 @@ func TestDirectPromptApprovedAndDeclined(t *testing.T) {
 	}
 }
 
-// A client that advertises elicitation but never answers must not block the call.
 func TestUnansweredPromptFallsBackAndStopsAsking(t *testing.T) {
 	s := newTestServer(t, "", guardedRunner())
 	prompts := 0

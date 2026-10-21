@@ -176,7 +176,7 @@ func TestGuardRecoversFromPanic(t *testing.T) {
 	boom := func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, any, error) {
 		panic("kaboom")
 	}
-	r, _, err := guard(s, "boomTool", boom)(context.Background(), nil, struct{}{})
+	r, _, err := guard[struct{}, moduleOut](s, "boomTool", boom)(context.Background(), nil, struct{}{})
 	if err != nil || r == nil || !r.IsError || !strings.Contains(text(t, r), "internal error in boomTool") {
 		t.Fatalf("unexpected: %v %v", r, err)
 	}

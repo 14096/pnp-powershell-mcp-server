@@ -10,7 +10,6 @@ import (
 	"github.com/14096/pnp-powershell-mcp-server/internal/pwsh"
 )
 
-// connect wires a real MCP client to the server over in-memory transports.
 func connect(t *testing.T, s *Server, opts *mcp.ClientOptions) *mcp.ClientSession {
 	t.Helper()
 	ctx := context.Background()
@@ -76,8 +75,6 @@ func TestClientWithoutElicitationGetsToken(t *testing.T) {
 	}
 }
 
-// By default native prompts are not used, even when the client supports them,
-// so clients that never display them cannot leave the call stuck.
 func TestNativePromptIsOptIn(t *testing.T) {
 	s := newTestServer(t, "", guardedRunner())
 	cs := connect(t, s, &mcp.ClientOptions{
@@ -88,5 +85,47 @@ func TestNativePromptIsOptIn(t *testing.T) {
 	})
 	if out := callRun(t, cs, "Remove-PnPList -Identity x"); !strings.Contains(out, "CONFIRMATION REQUIRED") {
 		t.Errorf("got %q", out)
+	}
+}
+
+func TestStructuredContent(t *testing.T) {
+	ctx := context.Background()
+	runner := &fakeRunner{res: pwsh.Result{Stdout: "[{\"Title\":\"A\"}]"}}
+	cs := connect(t, newTestServer(t, "", runner), nil)
+
+	tools, err := cs.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tl := range tools.Tools {
+		if tl.OutputSchema == nil {
+			t.Errorf("%s has no output schema", tl.Name)
+		}
+	}
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "pnpRunCmdlet", Arguments: map[string]any{"expression": "Get-PnPList | ConvertTo-Json"}})
+	if err != nil || res.IsError {
+		t.Fatalf("%v %v", res, err)
+	}
+	sc, _ := res.StructuredContent.(map[string]any)
+	if sc["ok"] != true {
+		t.Fatalf("structured content: %v", res.StructuredContent)
+	}
+	if d, _ := sc["data"].([]any); len(d) != 1 {
+		t.Errorf("data not parsed: %v", sc["data"])
+	}
+
+	res, err = cs.CallTool(ctx, &mcp.CallToolParams{Name: "pnpSearchCmdlets", Arguments: map[string]any{"query": "teams"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc, _ = res.StructuredContent.(map[string]any)
+	if r, _ := sc["results"].([]any); sc["ok"] != true || len(r) != 1 {
+		t.Errorf("search structured content: %v", res.StructuredContent)
+	}
+
+	res, _ = cs.CallTool(ctx, &mcp.CallToolParams{Name: "pnpSearchCmdlets", Arguments: map[string]any{"query": " "}})
+	if !res.IsError {
+		t.Errorf("empty query should be an error")
 	}
 }

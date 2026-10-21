@@ -30,6 +30,11 @@ func run() error {
 	elicitation := flag.Bool("elicitation", false, "confirm risky operations through the client's native prompt (only for clients that show MCP prompts reliably); default is confirmation in the conversation")
 	debug := flag.Bool("debug", false, "verbose logging to stderr (includes executed expressions)")
 	showVersion := flag.Bool("version", false, "print the version and exit")
+	flag.Usage = func() {
+		fmt.Fprintf(flag.CommandLine.Output(), "pnp-powershell-mcp-server %s\n\nMCP server (stdio) that runs PnP.PowerShell cmdlets against SharePoint and Microsoft 365.\nIt is normally started by an MCP client, not by hand.\n\nUsage:\n  pnp-powershell-mcp-server [flags]\n\nFlags:\n", version)
+		flag.PrintDefaults()
+		fmt.Fprintln(flag.CommandLine.Output(), "\nDocs: https://github.com/14096/pnp-powershell-mcp-server")
+	}
 	flag.Parse()
 	if *showVersion {
 		fmt.Println(version)
