@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 const (
@@ -27,10 +28,9 @@ func clampMaxChars(n int) int {
 	return n
 }
 
-// formatOutput prepares command output for an LLM: valid JSON is compacted to
-// save tokens, and output over limit bytes is cut with an explanatory notice.
-// JSON arrays are cut at element boundaries so the result stays valid JSON.
-func formatOutput(out string, limit int) string {
+func formatOutput(out string, limit int) string { return formatOutputAt(out, limit, 0) }
+
+func formatOutputAt(out string, limit, offset int) string {
 	out = strings.TrimSpace(out)
 	if out == "" {
 		return "(no output)"
@@ -38,16 +38,23 @@ func formatOutput(out string, limit int) string {
 	if compact, ok := compactJSON(out); ok {
 		out = compact
 	}
-	if len(out) <= limit {
-		return out
-	}
+	offset = max(offset, 0)
 	if strings.HasPrefix(out, "[") {
 		var items []json.RawMessage
 		if json.Unmarshal([]byte(out), &items) == nil {
-			return truncateArray(items, len(out), limit)
+			if offset == 0 && len(out) <= limit {
+				return out
+			}
+			if offset >= len(items) {
+				return fmt.Sprintf("[]\n\n[PAGE] offset %d is past the end; the result has %d items.", offset, len(items))
+			}
+			return truncateArray(items, offset, len(out), limit)
 		}
 	}
-	return truncateText(out, limit)
+	if offset == 0 && len(out) <= limit {
+		return out
+	}
+	return truncateText(out, offset, limit)
 }
 
 func compactJSON(s string) (string, bool) {
@@ -61,7 +68,8 @@ func compactJSON(s string) (string, bool) {
 	return buf.String(), true
 }
 
-func truncateArray(items []json.RawMessage, total, limit int) string {
+func truncateArray(all []json.RawMessage, offset, total, limit int) string {
+	items := all[offset:]
 	budget := limit - 2 // brackets
 	var kept []json.RawMessage
 	used := 0
@@ -70,23 +78,43 @@ func truncateArray(items []json.RawMessage, total, limit int) string {
 		if len(kept) > 0 {
 			need++ // comma
 		}
-		if used+need > budget {
+		if used+need > budget && len(kept) > 0 {
 			break
 		}
 		used += need
 		kept = append(kept, it)
 	}
 	body, _ := json.Marshal(kept)
-	return fmt.Sprintf("%s\n\n[TRUNCATED] Showing %d of %d items (%d of %d chars). %s Or raise maxChars (max %d).",
-		body, len(kept), len(items), len(body), total, narrowHint, maxMaxChars)
+	end := offset + len(kept)
+	if end >= len(all) {
+		if offset == 0 {
+			return string(body)
+		}
+		return fmt.Sprintf("%s\n\n[PAGE] Showing items %d-%d of %d (end of result).", body, offset+1, end, len(all))
+	}
+	return fmt.Sprintf("%s\n\n[TRUNCATED] Showing %d of %d items (items %d-%d, %d of %d chars). Call again with offset=%d for the next page. %s Or raise maxChars (max %d).",
+		body, len(kept), len(all), offset+1, end, len(body), total, end, narrowHint, maxMaxChars)
 }
 
-func truncateText(out string, limit int) string {
-	cut := out[:limit]
+func truncateText(out string, offset, limit int) string {
+	for offset < len(out) && !utf8.RuneStart(out[offset]) {
+		offset++
+	}
+	if offset >= len(out) {
+		return fmt.Sprintf("(no output)\n\n[PAGE] offset %d is past the end; the result has %d chars.", offset, len(out))
+	}
+	rest := out[offset:]
+	if len(rest) <= limit {
+		if offset == 0 {
+			return rest
+		}
+		return fmt.Sprintf("%s\n\n[PAGE] Showing chars %d-%d of %d (end of result).", rest, offset, len(out), len(out))
+	}
+	cut := rest[:limit]
 	if i := strings.LastIndexByte(cut, '\n'); i > limit/2 {
 		cut = cut[:i]
 	}
 	cut = strings.ToValidUTF8(cut, "")
-	return fmt.Sprintf("%s\n\n[TRUNCATED] Showing %d of %d chars (%d of %d lines). %s Or raise maxChars (max %d).",
-		cut, len(cut), len(out), strings.Count(cut, "\n")+1, strings.Count(out, "\n")+1, narrowHint, maxMaxChars)
+	return fmt.Sprintf("%s\n\n[TRUNCATED] Showing %d of %d chars (%d of %d lines). Call again with offset=%d for the next page. %s Or raise maxChars (max %d).",
+		cut, len(cut), len(out), strings.Count(cut, "\n")+1, strings.Count(out, "\n")+1, offset+len(cut), narrowHint, maxMaxChars)
 }

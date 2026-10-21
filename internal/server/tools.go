@@ -11,6 +11,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/14096/pnp-powershell-mcp-server/internal/catalog"
 	"github.com/14096/pnp-powershell-mcp-server/internal/docs"
 	"github.com/14096/pnp-powershell-mcp-server/internal/pwsh"
 )
@@ -76,6 +77,7 @@ type searchOut struct {
 	CmdletCount int            `json:"cmdletCount,omitempty"`
 	Query       string         `json:"query,omitempty"`
 	Results     []searchResult `json:"results,omitempty"`
+	Related     []string       `json:"related,omitempty" jsonschema:"other cmdlets on the same noun as the top result"`
 }
 
 type refreshOut struct {
@@ -101,6 +103,7 @@ type runArgs struct {
 	Expression        string `json:"expression" jsonschema:"PowerShell expression using PnP.PowerShell cmdlets, e.g. Get-PnPList | Select-Object Title,Id | ConvertTo-Json"`
 	TimeoutSec        int    `json:"timeoutSec,omitempty" jsonschema:"timeout in seconds (default 120, max 900)"`
 	MaxChars          int    `json:"maxChars,omitempty" jsonschema:"max characters of output to return (default 30000, max 200000); longer output is truncated with a notice"`
+	Offset            int    `json:"offset,omitempty" jsonschema:"page start: item index for JSON array output, character offset otherwise. Use the offset named in a [TRUNCATED] notice to fetch the next page; the expression is re-run"`
 	ConfirmationToken string `json:"confirmationToken,omitempty" jsonschema:"token from a previous [CONFIRMATION REQUIRED] response; only pass it after the user explicitly approved"`
 }
 
@@ -176,7 +179,7 @@ func (s *Server) runCmdlet(ctx context.Context, req *mcp.CallToolRequest, a runA
 		return result(msg, true)
 	}
 
-	out := formatOutput(res.Stdout, clampMaxChars(a.MaxChars))
+	out := formatOutputAt(res.Stdout, clampMaxChars(a.MaxChars), a.Offset)
 	if res.Truncated {
 		out += "\n\n[TRUNCATED] Output exceeded the server's capture limit and was cut. " + narrowHint
 	}
@@ -188,7 +191,7 @@ func (s *Server) runCmdlet(ctx context.Context, req *mcp.CallToolRequest, a runA
 		out += "\n\n[NOTE] " + strings.Join(limitNotes, "; ") + "."
 	}
 	data := runOut{Ok: true, Output: out, Truncated: res.Truncated || strings.Contains(out, "\n\n[TRUNCATED] "), UndocumentedCmdlets: missing}
-	if trimmed := strings.TrimSpace(res.Stdout); trimmed != "" && (trimmed[0] == '{' || trimmed[0] == '[') && !data.Truncated {
+	if trimmed := strings.TrimSpace(res.Stdout); trimmed != "" && (trimmed[0] == '{' || trimmed[0] == '[') && !data.Truncated && a.Offset <= 0 {
 		var v any
 		if json.Unmarshal([]byte(trimmed), &v) == nil {
 			data.Data = v
@@ -245,13 +248,15 @@ func (s *Server) getCmdletDocs(ctx context.Context, _ *mcp.CallToolRequest, a do
 }
 
 type searchArgs struct {
-	Query string `json:"query" jsonschema:"required; keywords, e.g. 'list item add' or 'teams channel'"`
+	Query string `json:"query" jsonschema:"keywords, e.g. 'list item add' or 'teams channel'; may be empty when verb or noun is given"`
+	Verb  string `json:"verb,omitempty" jsonschema:"only cmdlets with this verb, e.g. Get, Add, Set, Remove"`
+	Noun  string `json:"noun,omitempty" jsonschema:"only cmdlets with this noun, e.g. List or PnPList"`
 	Limit int    `json:"limit,omitempty" jsonschema:"max results (default 20, max 100)"`
 }
 
 func (s *Server) searchCmdlets(ctx context.Context, _ *mcp.CallToolRequest, a searchArgs) (*mcp.CallToolResult, any, error) {
-	if strings.TrimSpace(a.Query) == "" {
-		return fail("query is required, e.g. 'list item add' or 'teams channel'")
+	if strings.TrimSpace(a.Query) == "" && strings.TrimSpace(a.Verb) == "" && strings.TrimSpace(a.Noun) == "" {
+		return fail("query is required, e.g. 'list item add' or 'teams channel' (or filter by verb/noun)")
 	}
 	cat, err := s.store.Wait(ctx)
 	if err != nil {
@@ -262,17 +267,29 @@ func (s *Server) searchCmdlets(ctx context.Context, _ *mcp.CallToolRequest, a se
 		limit = 20
 	}
 	limit = min(limit, maxSearchLimit)
-	found := cat.Search(a.Query, limit)
+	found := cat.SearchWith(catalog.SearchOptions{Query: a.Query, Verb: a.Verb, Noun: a.Noun, Limit: limit})
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "PnP.PowerShell %s (%d cmdlets)\n", cat.Version, len(cat.Commands))
+	out := searchOut{Ok: true, Version: cat.Version, CmdletCount: len(cat.Commands), Query: a.Query}
 	if len(found) == 0 {
 		fmt.Fprintf(&sb, "No cmdlets matched %q. Try fewer or broader keywords (e.g. a noun like 'list' or 'site').", a.Query)
-		return resultWith(sb.String(), searchOut{Ok: true, Version: cat.Version, CmdletCount: len(cat.Commands), Query: a.Query})
+		return resultWith(sb.String(), out)
 	}
-	out := searchOut{Ok: true, Version: cat.Version, CmdletCount: len(cat.Commands), Query: a.Query}
 	for _, c := range found {
 		fmt.Fprintf(&sb, "- %s: %s\n", c.Name, c.Synopsis)
 		out.Results = append(out.Results, searchResult{Name: c.Name, Synopsis: c.Synopsis})
+	}
+	shown := map[string]bool{}
+	for _, c := range found {
+		shown[c.Name] = true
+	}
+	for _, r := range cat.Related(found[0].Name, 8) {
+		if !shown[r] {
+			out.Related = append(out.Related, r)
+		}
+	}
+	if len(out.Related) > 0 {
+		fmt.Fprintf(&sb, "\nRelated to %s: %s\n", found[0].Name, strings.Join(out.Related, ", "))
 	}
 	sb.WriteString("\nNext: pnpGetCmdletDocs for the cmdlet you need, then pnpRunCmdlet.")
 	return resultWith(sb.String(), out)

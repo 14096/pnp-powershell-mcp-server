@@ -95,3 +95,30 @@ func TestLoadSynopses(t *testing.T) {
 		t.Errorf("missing file should yield empty map, got %d", n)
 	}
 }
+
+func TestSearchWithFiltersAndRanking(t *testing.T) {
+	c := &Catalog{Commands: []Cmdlet{
+		{Name: "Get-PnPListItem", Synopsis: "Retrieves list items."},
+		{Name: "Get-PnPList", Synopsis: "Returns lists."},
+		{Name: "Remove-PnPList", Synopsis: "Deletes a list."},
+		{Name: "Get-PnPField", Synopsis: "Returns columns.", Parameters: []Param{{Name: "List"}}},
+	}}
+	if got := c.SearchWith(SearchOptions{Query: "list", Limit: 10}); got[0].Name != "Get-PnPList" && got[0].Name != "Remove-PnPList" {
+		t.Errorf("exact noun should rank first, got %s", got[0].Name)
+	}
+	got := c.SearchWith(SearchOptions{Verb: "get", Noun: "PnPList", Limit: 10})
+	if len(got) != 1 || got[0].Name != "Get-PnPList" {
+		t.Errorf("verb/noun filter: %v", got)
+	}
+	if got := c.SearchWith(SearchOptions{Query: "list", Limit: 10}); got[len(got)-1].Name != "Get-PnPField" {
+		t.Errorf("parameter-only match should rank last, got %v", got)
+	}
+}
+
+func TestRelated(t *testing.T) {
+	c := &Catalog{Commands: []Cmdlet{{Name: "Get-PnPList"}, {Name: "Set-PnPList"}, {Name: "Get-PnPListItem"}, {Name: "Get-PnPSite"}}}
+	got := c.Related("Get-PnPList", 5)
+	if len(got) != 2 || got[0] != "Set-PnPList" || got[1] != "Get-PnPListItem" {
+		t.Errorf("related: %v", got)
+	}
+}

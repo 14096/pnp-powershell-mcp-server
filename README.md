@@ -188,13 +188,20 @@ npx @modelcontextprotocol/inspector ./bin/pnp-powershell-mcp-server
 
 | Tool                | Purpose                                                                                              |
 | ------------------- | ---------------------------------------------------------------------------------------------------- |
-| `pnpSearchCmdlets`  | Keyword search over installed cmdlets                                                                |
+| `pnpSearchCmdlets`  | Ranked keyword search over installed cmdlets, optional `verb`/`noun` filters, related cmdlets        |
 | `pnpGetCmdletDocs`  | Current docs for a cmdlet (online, falls back to local `Get-Help`)                                   |
 | `pnpRunCmdlet`      | Run an expression in a fresh `pwsh`; names are validated and risky operations need your confirmation |
 | `pnpRefreshCmdlets` | Rebuild the catalog; `update: true` installs the latest module first                                 |
 | `pnpGetModuleInfo`  | Installed version, catalog status                                                                    |
 
 Recommended flow: search -> docs -> run.
+
+### Resources and prompts
+
+- Resource `pnp://best-practices`: the [best-practices.md](best-practices.md)
+  guide, embedded in the binary.
+- Prompts (read-only starting points): `pnpAuditSitePermissions`,
+  `pnpInventoryLists`, `pnpFindCmdlet`, `pnpTeamsOverview`.
 
 Every tool also returns **structured content** with a published output schema,
 next to the text block (which is unchanged). Each result has an `ok` flag (`false`
@@ -260,6 +267,10 @@ This is a safety net, not a sandbox: static analysis cannot catch everything
 
 - **Compact output:** valid JSON (for example from `ConvertTo-Json`) is compacted
   before it is returned, which saves tokens.
+- **Paging:** pass `offset` to `pnpRunCmdlet` to continue after a truncated
+  result. It is an item index for JSON arrays and a character offset otherwise;
+  the `[TRUNCATED]` notice names the next `offset`. The expression is re-run for
+  each page.
 - **Size limit:** output over `maxChars` (default 30,000, max 200,000; set per
   call) is truncated with a notice. JSON arrays are cut at item boundaries, so
   the result stays valid JSON, and the notice says how many items were shown

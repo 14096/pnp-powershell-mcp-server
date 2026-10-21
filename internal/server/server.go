@@ -38,11 +38,14 @@ type Server struct {
 	multiRoundTrip func(*mcp.CallToolRequest) bool
 	supportsElicit func(*mcp.CallToolRequest) bool
 	promptTimeout  time.Duration
+	guide          string
 }
 
 type Option func(*Server)
 
 func WithElicitation() Option { return func(s *Server) { s.elicitation = true } }
+
+func WithGuide(md string) Option { return func(s *Server) { s.guide = md } }
 
 func WithLogger(l *slog.Logger) Option { return func(s *Server) { s.log = l } }
 
@@ -89,6 +92,7 @@ func (s *Server) MCP(version string) *mcp.Server {
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 		Description: "Show the installed PnP.PowerShell version and catalog status.",
 	}, guard[struct{}, moduleOut](s, "pnpGetModuleInfo", s.moduleInfo))
+	s.addPromptsAndResources(srv)
 	return srv
 }
 

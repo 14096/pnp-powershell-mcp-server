@@ -188,7 +188,7 @@ Get-PnPSiteCollectionAdmin
 ```powershell
 # Get all teams — assign first; piping Get-PnPTeamsTeam straight into
 # Select-Object returns a single all-null object (see "Assign Results to a
-# Variable Before Shaping Them" above)
+# Variable Before Shaping Them" below)
 $teams = Get-PnPTeamsTeam
 
 $teams | Select-Object DisplayName, GroupId, Visibility
@@ -212,13 +212,51 @@ $aadGroups | Select-Object DisplayName, GroupTypes, SecurityEnabled
 
 ## Working with Complex Data
 
-When you need to pass complex JSON or object data to a cmdlet, prefer building it as a PowerShell hashtable in the same command rather than trying to inline large JSON strings — it's less error-prone through the base64-encoded execution path used by `pnp_run_command`:
+When you need to pass complex JSON or object data to a cmdlet, prefer building it as a PowerShell hashtable in the same command rather than trying to inline large JSON strings — it's less error-prone, because the expression is passed to `pwsh` as one string through an environment variable:
 
 ```powershell
 
 $values = @{ Title = "New Task"; Status = "Not Started"; Priority = "High" }
 Add-PnPListItem -List "Tasks" -Values $values
 ```
+
+## Assign Results to a Variable Before Shaping Them
+
+Some cmdlets (for example `Get-PnPTeamsTeam`) return a collection in a way that
+makes `Select-Object` in the same pipeline produce a single object with null
+properties. Assign first, then shape:
+
+```powershell
+$teams = Get-PnPTeamsTeam
+$teams | Select-Object DisplayName, GroupId | ConvertTo-Json
+```
+
+## Paging Large Results
+
+When output is longer than `maxChars`, `pnpRunCmdlet` cuts it and the
+`[TRUNCATED]` notice names the `offset` to continue with. Call `pnpRunCmdlet`
+again with the same expression and that `offset`:
+
+- For JSON arrays, `offset` is an **item index** and pages always end at item
+  boundaries, so every page is valid JSON.
+- For other output, `offset` is a **character offset**.
+- The expression is executed again for each page, so prefer narrowing the query
+  (`-First`, `-Filter`, `Select-Object`) for expensive cmdlets, and avoid paging
+  through expressions that change data.
+
+## Finding Cmdlets
+
+`pnpSearchCmdlets` ranks exact verb/noun matches first, then name matches, then
+synopsis and parameter-name matches. Narrow with `verb` and `noun`
+(`verb: "Get", noun: "List"`), and use the `related` list in the result to find
+sibling cmdlets (`Set-PnPList`, `Get-PnPListItem`, ...).
+
+## MCP Resources and Prompts
+
+- Resource `pnp://best-practices`: this document, for clients that can attach resources.
+- Prompts: `pnpAuditSitePermissions`, `pnpInventoryLists`, `pnpFindCmdlet`,
+  `pnpTeamsOverview`. They are read-only starting points; clients typically
+  show them as slash commands.
 
 ## Debugging and Verbose Output
 

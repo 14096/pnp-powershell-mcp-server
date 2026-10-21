@@ -77,3 +77,44 @@ func TestClampMaxChars(t *testing.T) {
 		}
 	}
 }
+
+func TestFormatOutputAtPagesJSONArray(t *testing.T) {
+	var items []int
+	for i := 0; i < 100; i++ {
+		items = append(items, 100000+i)
+	}
+	b, _ := json.Marshal(items)
+	first := formatOutputAt(string(b), 100, 0)
+	if !strings.Contains(first, "offset=") {
+		t.Fatalf("missing next offset: %s", first)
+	}
+	body, _, _ := strings.Cut(first, "\n\n")
+	var page []int
+	if err := json.Unmarshal([]byte(body), &page); err != nil || page[0] != 100000 {
+		t.Fatalf("bad first page: %v %s", err, body)
+	}
+	n := len(page)
+	next := formatOutputAt(string(b), 100, n)
+	body, _, _ = strings.Cut(next, "\n\n")
+	if err := json.Unmarshal([]byte(body), &page); err != nil || page[0] != 100000+n {
+		t.Fatalf("bad second page: %v %s", err, body)
+	}
+	last := formatOutputAt(string(b), 100, 95)
+	if !strings.Contains(last, "end of result") {
+		t.Errorf("last page: %s", last)
+	}
+	if got := formatOutputAt(string(b), 100, 500); !strings.Contains(got, "past the end") {
+		t.Errorf("past end: %s", got)
+	}
+}
+
+func TestFormatOutputAtPagesText(t *testing.T) {
+	in := strings.Repeat("line of text\n", 50)
+	got := formatOutputAt(in, 100, 400)
+	if !strings.Contains(got, "offset=") {
+		t.Errorf("expected continuation offset: %s", got)
+	}
+	if got := formatOutputAt(in, 1000, 600); !strings.Contains(got, "end of result") {
+		t.Errorf("expected end of result: %s", got)
+	}
+}

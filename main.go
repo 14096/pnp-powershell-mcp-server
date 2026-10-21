@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -18,6 +19,9 @@ import (
 )
 
 var version = "dev"
+
+//go:embed best-practices.md
+var guide string
 
 func main() {
 	if err := run(); err != nil {
@@ -64,7 +68,7 @@ func run() error {
 	store := catalog.NewStore(runner, catalog.DefaultCacheFile())
 	store.Start(ctx)
 
-	opts := []server.Option{server.WithLogger(logger)}
+	opts := []server.Option{server.WithLogger(logger), server.WithGuide(guide)}
 	if *elicitation {
 		opts = append(opts, server.WithElicitation())
 	}
