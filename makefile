@@ -1,6 +1,6 @@
 BINARY := pnp-powershell-mcp-server
 
-.PHONY: all clean tidy fmt vet lint check build run test install
+.PHONY: all clean tidy fmt vet lint check build run test install docker docker-run
 
 all: build
 
@@ -32,3 +32,9 @@ test:
 
 install:
 	go install .
+
+docker:
+	docker build -t $(BINARY) .
+
+docker-run: docker
+	docker run -i --rm $(BINARY)

@@ -108,3 +108,20 @@ func TestCappedBuffer(t *testing.T) {
 		t.Errorf("len=%d truncated=%v", b.Len(), b.truncated)
 	}
 }
+
+func TestRunScriptWarningsGoToStderr(t *testing.T) {
+	if _, err := exec.LookPath("pwsh"); err != nil {
+		t.Skip("pwsh not available")
+	}
+	ctx := context.Background()
+	if r, err := (Exec{}).Run(ctx, VersionScript, nil, time.Minute); err != nil || r.ExitCode != 0 {
+		t.Skip("PnP.PowerShell not installed")
+	}
+	r, err := (Exec{}).Run(ctx, RunScript, map[string]string{EnvExpression: "Write-Warning 'careful'; 'result'"}, time.Minute)
+	if err != nil || r.ExitCode != 0 {
+		t.Fatalf("exit=%d err=%v stderr=%q", r.ExitCode, err, r.Stderr)
+	}
+	if strings.TrimSpace(r.Stdout) != "result" || !strings.Contains(r.Stderr, "WARNING: careful") {
+		t.Errorf("stdout=%q stderr=%q", r.Stdout, r.Stderr)
+	}
+}

@@ -56,6 +56,7 @@ type runOut struct {
 	ConfirmationToken    string   `json:"confirmationToken,omitempty" jsonschema:"single-use token to pass after the user approved"`
 	Cancelled            bool     `json:"cancelled,omitempty" jsonschema:"true when the user declined"`
 	UndocumentedCmdlets  []string `json:"undocumentedCmdlets,omitempty" jsonschema:"cmdlets used without consulting pnpGetCmdletDocs this session"`
+	Warnings             []string `json:"warnings,omitempty" jsonschema:"warnings and other stderr output from a successful run"`
 }
 
 type docsOut struct {
@@ -130,7 +131,7 @@ func (s *Server) runCmdlet(ctx context.Context, req *mcp.CallToolRequest, a runA
 	}
 	confirmed := answer == approved || (a.ConfirmationToken != "" && s.tokens.redeem(a.ConfirmationToken, a.Expression))
 	s.log.Debug("running expression", "expression", a.Expression, "confirmed", confirmed, "timeout", timeout)
-	res, err := s.exec(ctx, a.Expression, confirmed, timeout)
+	res, err := s.exec(ctx, req, a.Expression, confirmed, timeout)
 	if err != nil {
 		return s.execFailure(err, timeout)
 	}
@@ -152,7 +153,7 @@ func (s *Server) runCmdlet(ctx context.Context, req *mcp.CallToolRequest, a runA
 			case declined:
 				return resultWith(tagCancelled, runOut{Cancelled: true})
 			case approved:
-				if res, err = s.exec(ctx, a.Expression, true, timeout); err != nil {
+				if res, err = s.exec(ctx, req, a.Expression, true, timeout); err != nil {
 					return s.execFailure(err, timeout)
 				}
 			}
@@ -190,7 +191,16 @@ func (s *Server) runCmdlet(ctx context.Context, req *mcp.CallToolRequest, a runA
 	if len(limitNotes) > 0 {
 		out += "\n\n[NOTE] " + strings.Join(limitNotes, "; ") + "."
 	}
-	data := runOut{Ok: true, Output: out, Truncated: res.Truncated || strings.Contains(out, "\n\n[TRUNCATED] "), UndocumentedCmdlets: missing}
+	var warnings []string
+	for _, l := range strings.Split(strings.TrimSpace(res.Stderr), "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			warnings = append(warnings, l)
+		}
+	}
+	if len(warnings) > 0 {
+		out += "\n\n[WARNINGS]\n" + strings.Join(warnings, "\n")
+	}
+	data := runOut{Ok: true, Output: out, Truncated: res.Truncated || strings.Contains(out, "\n\n[TRUNCATED] "), UndocumentedCmdlets: missing, Warnings: warnings}
 	if trimmed := strings.TrimSpace(res.Stdout); trimmed != "" && (trimmed[0] == '{' || trimmed[0] == '[') && !data.Truncated && a.Offset <= 0 {
 		var v any
 		if json.Unmarshal([]byte(trimmed), &v) == nil {
@@ -359,10 +369,47 @@ func (s *Server) execFailure(err error, timeout time.Duration) (*mcp.CallToolRes
 	return fail("%v", err)
 }
 
-func (s *Server) exec(ctx context.Context, expr string, confirmed bool, timeout time.Duration) (pwsh.Result, error) {
+func (s *Server) exec(ctx context.Context, req *mcp.CallToolRequest, expr string, confirmed bool, timeout time.Duration) (pwsh.Result, error) {
 	env := map[string]string{pwsh.EnvExpression: expr}
 	if confirmed {
 		env[pwsh.EnvConfirmed] = "1"
 	}
+	defer s.reportProgress(ctx, req, timeout)()
 	return s.runner.Run(ctx, pwsh.RunScript, env, timeout)
+}
+
+const progressInterval = 5 * time.Second
+
+func (s *Server) reportProgress(ctx context.Context, req *mcp.CallToolRequest, timeout time.Duration) func() {
+	if req == nil || req.Session == nil || req.Params == nil || req.Params.GetProgressToken() == nil {
+		return func() {}
+	}
+	token := req.Params.GetProgressToken()
+	interval := s.progressInterval
+	if interval <= 0 {
+		interval = progressInterval
+	}
+	done := make(chan struct{})
+	go func() {
+		start := time.Now()
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				elapsed := time.Since(start).Round(time.Second)
+				_ = req.Session.NotifyProgress(ctx, &mcp.ProgressNotificationParams{
+					ProgressToken: token,
+					Progress:      elapsed.Seconds(),
+					Total:         timeout.Seconds(),
+					Message:       fmt.Sprintf("PowerShell still running (%s of max %s)", elapsed, timeout),
+				})
+			}
+		}
+	}()
+	return func() { close(done) }
 }

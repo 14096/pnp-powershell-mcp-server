@@ -3,7 +3,9 @@ package server
 import (
 	"context"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -127,5 +129,32 @@ func TestStructuredContent(t *testing.T) {
 	res, _ = cs.CallTool(ctx, &mcp.CallToolParams{Name: "pnpSearchCmdlets", Arguments: map[string]any{"query": " "}})
 	if !res.IsError {
 		t.Errorf("empty query should be an error")
+	}
+}
+
+func TestWarningsReturned(t *testing.T) {
+	runner := &fakeRunner{res: pwsh.Result{Stdout: "ok\n", Stderr: "WARNING: careful\n"}}
+	s := newTestServer(t, "", runner)
+	if out := callRun(t, connect(t, s, nil), "Get-Date"); !strings.Contains(out, "[WARNINGS]\nWARNING: careful") {
+		t.Errorf("warnings missing: %s", out)
+	}
+}
+
+func TestProgressNotifications(t *testing.T) {
+	runner := &fakeRunner{res: pwsh.Result{Stdout: "ok\n"}, fn: func(map[string]string) pwsh.Result {
+		time.Sleep(200 * time.Millisecond)
+		return pwsh.Result{Stdout: "ok\n"}
+	}}
+	s := newTestServer(t, "", runner)
+	s.progressInterval = 20 * time.Millisecond
+	var n atomic.Int32
+	cs := connect(t, s, &mcp.ClientOptions{ProgressNotificationHandler: func(context.Context, *mcp.ProgressNotificationClientRequest) { n.Add(1) }})
+	params := &mcp.CallToolParams{Name: "pnpRunCmdlet", Arguments: map[string]any{"expression": "Get-Date"}}
+	params.SetProgressToken("tok")
+	if _, err := cs.CallTool(context.Background(), params); err != nil {
+		t.Fatal(err)
+	}
+	if n.Load() == 0 {
+		t.Error("expected progress notifications")
 	}
 }

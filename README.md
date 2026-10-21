@@ -175,6 +175,21 @@ server in the client. To skip the manual build, run from source instead:
 npx @modelcontextprotocol/inspector ./bin/pnp-powershell-mcp-server
 ```
 
+**Test in Docker.** The `Dockerfile` builds the server and bundles PowerShell 7
+with `PnP.PowerShell`, so you can try it without installing anything locally:
+
+```sh
+make docker        # docker build -t pnp-powershell-mcp-server .
+make docker-run    # run on stdio (docker run -i --rm)
+npx @modelcontextprotocol/inspector docker run -i --rm pnp-powershell-mcp-server
+```
+
+To use it from a client, set the command to `docker` with args
+`["run", "-i", "--rm", "pnp-powershell-mcp-server"]`. Keep `-i` and omit `-t`
+(stdio transport). Interactive browser login (`Connect-PnPOnline -Interactive`)
+does not work inside a container, so use it to check startup, tool listing,
+cmdlet search and docs; for real tenant access use the local binary.
+
 **Debugging tips**
 
 - Logs go to **stderr**; stdout is reserved for the MCP protocol, so never

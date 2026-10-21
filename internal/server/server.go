@@ -24,21 +24,22 @@ const instructions = "Run PnP.PowerShell cmdlets. Authentication is NOT managed:
 	"and only after a clear yes call it again with the same expression and the confirmationToken. Never obtain or reuse a token without asking the user."
 
 type Server struct {
-	runner         pwsh.Runner
-	store          *catalog.Store
-	docs           *docs.Client
-	mu             sync.Mutex
-	consulted      map[string]bool
-	tokens         *tokens
-	secret         []byte
-	elicitation    bool
-	log            *slog.Logger
-	noElicit       sync.Map
-	elicit         func(context.Context, *mcp.ElicitParams) (*mcp.ElicitResult, error)
-	multiRoundTrip func(*mcp.CallToolRequest) bool
-	supportsElicit func(*mcp.CallToolRequest) bool
-	promptTimeout  time.Duration
-	guide          string
+	runner           pwsh.Runner
+	store            *catalog.Store
+	docs             *docs.Client
+	mu               sync.Mutex
+	consulted        map[string]bool
+	tokens           *tokens
+	secret           []byte
+	elicitation      bool
+	log              *slog.Logger
+	noElicit         sync.Map
+	elicit           func(context.Context, *mcp.ElicitParams) (*mcp.ElicitResult, error)
+	multiRoundTrip   func(*mcp.CallToolRequest) bool
+	supportsElicit   func(*mcp.CallToolRequest) bool
+	promptTimeout    time.Duration
+	progressInterval time.Duration
+	guide            string
 }
 
 type Option func(*Server)

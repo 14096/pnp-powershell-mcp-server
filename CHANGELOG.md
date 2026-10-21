@@ -5,6 +5,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.0.6] - 2026-10-21
+
+- `pnpRunCmdlet` returns PowerShell warnings from successful runs (`[WARNINGS]` block and `warnings` field) instead of dropping them.
+- Long-running `pnpRunCmdlet` calls send MCP progress notifications every 5 s when the client supplies a progress token.
+- Added a `Dockerfile` (with PowerShell and PnP.PowerShell), `make docker` / `make docker-run`, and a README section on testing with Docker.
+
 ## [0.0.5] - 2026-10-21
 
 - Added the `pnp://best-practices` resource and the prompts `pnpAuditSitePermissions`, `pnpInventoryLists`, `pnpFindCmdlet` and `pnpTeamsOverview`.
