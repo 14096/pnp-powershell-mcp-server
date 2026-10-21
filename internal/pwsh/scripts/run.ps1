@@ -66,11 +66,9 @@ try {
     exit 3
   }
 
-  $all = @(Invoke-Expression $expr 3>&1)
-  $r = @($all | Where-Object { $_ -isnot [System.Management.Automation.WarningRecord] })
-  foreach ($w in @($all | Where-Object { $_ -is [System.Management.Automation.WarningRecord] })) {
-    [Console]::Error.WriteLine("WARNING: " + $w.Message)
-  }
+  $r = @(Invoke-Expression $expr 3>&1 | ForEach-Object {
+    if ($_ -is [System.Management.Automation.WarningRecord]) { [Console]::Error.WriteLine("WARNING: " + $_.Message); [Console]::Error.Flush() } else { $_ }
+  })
   if ($r.Count -gt 0) { ($r | Out-String -Width 4096).TrimEnd() }
 } catch {
   [Console]::Error.WriteLine("Error ID: " + $_.FullyQualifiedErrorId)
