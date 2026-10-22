@@ -148,6 +148,23 @@ func TestRunCmdlet(t *testing.T) {
 			t.Errorf("unexpected: %s", text(t, r))
 		}
 	})
+	t.Run("auto-connect settings are passed via env", func(t *testing.T) {
+		runner := &fakeRunner{res: pwsh.Result{Stdout: "[]\n"}}
+		s := newTestServer(t, "", runner)
+		s.conn = Connection{URL: "https://t.sharepoint.com", ClientID: "app"}
+		s.runCmdlet(ctx, nil, runArgs{Expression: "Get-PnPList"})
+		if runner.env[pwsh.EnvConnectURL] != "https://t.sharepoint.com" || runner.env[pwsh.EnvConnectClientID] != "app" {
+			t.Errorf("env = %v", runner.env)
+		}
+	})
+	t.Run("auto-connect failure is prettified", func(t *testing.T) {
+		runner := &fakeRunner{res: pwsh.Result{ExitCode: 1, Stderr: "Error ID: X\nDetails: [AUTO_CONNECT_FAILED] login required"}}
+		s := newTestServer(t, "", runner)
+		r, _, _ := s.runCmdlet(ctx, nil, runArgs{Expression: "1"})
+		if !r.IsError || !strings.Contains(text(t, r), "-PersistLogin") {
+			t.Errorf("unexpected: %s", text(t, r))
+		}
+	})
 	t.Run("runner failure", func(t *testing.T) {
 		s := newTestServer(t, "", &fakeRunner{err: context.DeadlineExceeded})
 		if r, _, _ := s.runCmdlet(ctx, nil, runArgs{Expression: "1"}); !r.IsError {

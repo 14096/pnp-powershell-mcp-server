@@ -5,6 +5,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.0.8] - 2026-10-22
+
+- Optional automatic connection: `--url`, `--client-id` and `--tenant` (or `PNP_MCP_URL`, `PNP_MCP_CLIENTID`, `PNP_MCP_TENANT`) make `pnpRunCmdlet` connect to the site before every run, reusing a login persisted with `Connect-PnPOnline -PersistLogin`. Without `--url` behaviour is unchanged.
+- A failed automatic connection returns a message with the command to sign in again.
+- `Get-PnPAccessToken` and `Get-PnPConnection` now require confirmation; with automatic connection enabled, so does `Connect-PnPOnline` to another site.
+- Added the `version` subcommand (`--version` still works).
+
 ## [0.0.7] - 2026-10-21
 
 - fix: warning message

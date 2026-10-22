@@ -40,11 +40,20 @@ type Server struct {
 	promptTimeout    time.Duration
 	progressInterval time.Duration
 	guide            string
+	conn             Connection
 }
 
 type Option func(*Server)
 
 func WithElicitation() Option { return func(s *Server) { s.elicitation = true } }
+
+type Connection struct {
+	URL      string
+	ClientID string
+	Tenant   string
+}
+
+func WithConnection(c Connection) Option { return func(s *Server) { s.conn = c } }
 
 func WithGuide(md string) Option { return func(s *Server) { s.guide = md } }
 
@@ -59,9 +68,15 @@ func New(runner pwsh.Runner, store *catalog.Store, docsClient *docs.Client, opts
 }
 
 func (s *Server) MCP(version string) *mcp.Server {
+	instr := instructions
+	if s.conn.URL != "" {
+		instr = strings.Replace(instr, "Authentication is NOT managed: call Connect-PnPOnline beforehand. ",
+			"The server connects automatically to "+s.conn.URL+" before every run using a persisted login: do NOT call Connect-PnPOnline and do not ask the user to connect. "+
+				"Only call Connect-PnPOnline yourself to target a different site. ", 1)
+	}
 	srv := mcp.NewServer(
 		&mcp.Implementation{Name: "pnp-powershell-mcp-server", Version: version},
-		&mcp.ServerOptions{Instructions: instructions, Logger: s.log},
+		&mcp.ServerOptions{Instructions: instr, Logger: s.log},
 	)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "pnpRunCmdlet",

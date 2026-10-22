@@ -374,6 +374,9 @@ func (s *Server) exec(ctx context.Context, req *mcp.CallToolRequest, expr string
 	if confirmed {
 		env[pwsh.EnvConfirmed] = "1"
 	}
+	env[pwsh.EnvConnectURL] = s.conn.URL
+	env[pwsh.EnvConnectClientID] = s.conn.ClientID
+	env[pwsh.EnvConnectTenant] = s.conn.Tenant
 	defer s.reportProgress(ctx, req, timeout)()
 	return s.runner.Run(ctx, pwsh.RunScript, env, timeout)
 }

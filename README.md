@@ -37,6 +37,7 @@ To build from source, additionally: Go (see `go.mod`).
 git clone https://github.com/14096/pnp-powershell-mcp-server.git
 cd pnp-powershell-mcp-server
 make build        # -> bin/pnp-powershell-mcp-server
+bin/pnp-powershell-mcp-server version   # print the version
 ```
 
 Or install straight from GitHub with Go (the binary lands in `$(go env GOPATH)/bin`):
@@ -249,6 +250,9 @@ What counts as risky:
 - Write calls through `Invoke-PnPSPRestMethod` / `Invoke-PnPGraphMethod`
   (any `-Method` other than `Get`) and `Invoke-PnPBatch`
 - Method calls such as `.Delete()`, `.DeleteObject()`, `.Recycle()`
+- Exposing credentials: `Get-PnPAccessToken`, `Get-PnPConnection`
+- With automatic connection enabled: `Connect-PnPOnline` to any site other than
+  the configured `--url` (or with a non-literal URL)
 - Arbitrary code or side effects: `Invoke-Expression`, `Invoke-Command`,
   `Start-Process`, `Invoke-WebRequest`, `Invoke-RestMethod`, file writes,
   external programs, and dynamic invocation like `& $cmd`
@@ -304,13 +308,46 @@ This is a safety net, not a sandbox: static analysis cannot catch everything
 
 ## Authentication
 
-The server does **not** manage authentication. Run `Connect-PnPOnline` yourself
-in a PowerShell 7 session; the token cache is reused by every `pwsh` the server
-spawns:
+By default the server does **not** manage authentication. You can optionally let
+it connect for you (see below).
+
+### Default: the expression connects
+
+Sign in once with a persisted login:
 
 ```powershell
-Connect-PnPOnline -Url "https://<tenant>.sharepoint.com" -Interactive -ClientId "<app-id>"
+Connect-PnPOnline -Url "https://<tenant>.sharepoint.com" -Interactive -ClientId "<app-id>" -PersistLogin
 ```
+
+Each `pnpRunCmdlet` call runs in a fresh `pwsh`, so a connection is not shared
+between calls; only the token cache is. Name the site in your prompt and the
+assistant includes a `Connect-PnPOnline` in the expression, which reuses the
+cached token. Nothing needs to be configured.
+
+### Optional: automatic connection
+
+To avoid naming the site and client ID every time, start the server with `--url`
+and `--client-id` (and `--tenant` if you use one), or set the env vars
+`PNP_MCP_URL`, `PNP_MCP_CLIENTID`, `PNP_MCP_TENANT`. Use the same values as the
+persisted login: the cached token belongs to that app. `--url` must be an `https`
+URL.
+
+```json
+"command": ["/path/to/pnp-powershell-mcp-server", "--url", "https://<tenant>.sharepoint.com", "--client-id", "<app-id>"]
+```
+
+- Before every `pnpRunCmdlet` call the server runs
+  `Connect-PnPOnline -Interactive` for that site, which reuses the persisted
+  token, and the assistant is told not to ask you to connect.
+- An expression with its own `Connect-PnPOnline` skips the automatic connection.
+  If it targets another site, you are asked to confirm first.
+- If the persisted login is missing or expired, the call fails with a message
+  showing the command to run again. Risky operations are still confirmed first.
+- Without `--url`, nothing changes.
+- The persisted token is a standing credential for anything running as your
+  user, so register the app with least-privilege permissions.
+- Whether `-PersistLogin` survives across processes depends on your
+  PnP.PowerShell version and OS.
 
 See [best-practices.md](best-practices.md) for device login, certificate and
 managed identity options. Never put credentials in expressions.

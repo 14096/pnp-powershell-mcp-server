@@ -30,9 +30,12 @@ var (
 )
 
 const (
-	EnvExpression = "PNP_MCP_EXPR"
-	EnvCmdlet     = "PNP_MCP_CMDLET"
-	EnvConfirmed  = "PNP_MCP_CONFIRMED"
+	EnvExpression      = "PNP_MCP_EXPR"
+	EnvCmdlet          = "PNP_MCP_CMDLET"
+	EnvConfirmed       = "PNP_MCP_CONFIRMED"
+	EnvConnectURL      = "PNP_MCP_URL"
+	EnvConnectClientID = "PNP_MCP_CLIENTID"
+	EnvConnectTenant   = "PNP_MCP_TENANT"
 )
 
 const ExitConfirmationRequired = 3
@@ -61,7 +64,6 @@ func (b *cappedBuffer) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-// ErrNotFound means the pwsh executable is not installed or not in PATH.
 var ErrNotFound = errors.New("PowerShell 7+ (pwsh) was not found in PATH")
 
 type Runner interface {

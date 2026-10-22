@@ -5,6 +5,7 @@ $AST = 'System.Management.Automation.Language'
 $destructiveVerbs = 'Remove','Clear','Reset','Revoke','Unpublish','Uninstall','Unregister','Disable','Deny','Stop','Restart','Format'
 $dangerousCommands = 'Invoke-Expression','Invoke-Command','Start-Process','Invoke-WebRequest','Invoke-RestMethod','Add-Type','Set-Content','Out-File','Add-Content','Move-Item','Copy-Item','New-Item','Set-ExecutionPolicy'
 $writeApiCommands = 'Invoke-PnPSPRestMethod','Invoke-PnPGraphMethod','Invoke-PnPBatch'
+$tokenCommands = 'Get-PnPAccessToken','Get-PnPConnection'
 try {
   Import-Module PnP.PowerShell -ErrorAction Stop
   $errs=$null; $tokens=$null
@@ -54,6 +55,22 @@ try {
       }
       if ($real -eq 'Invoke-PnPBatch') { Add-Risk $real 'batch of operations (may modify or delete data)' }
       elseif ($method -and $method.Trim("'`"") -ne 'Get') { Add-Risk $real "API call with method $method (may modify or delete data)" }
+    } elseif ($tokenCommands -contains $real) {
+      Add-Risk $real 'exposes an access token or connection details to the conversation'
+    } elseif ($real -eq 'Connect-PnPOnline' -and $env:PNP_MCP_URL) {
+      $els = @($c.CommandElements); $target = $null
+      for ($i = 1; $i -lt $els.Count; $i++) {
+        $e = $els[$i]
+        if ($e -is [System.Management.Automation.Language.CommandParameterAst] -and 'Url' -like "$($e.ParameterName)*" -and $e.ParameterName.Length -ge 1) {
+          $a = if ($e.Argument) { $e.Argument } elseif ($i + 1 -lt $els.Count) { $els[$i + 1] }
+          if ($a -is [System.Management.Automation.Language.StringConstantExpressionAst]) { $target = $a.Value }
+          break
+        }
+      }
+      if (-not $target -and $els.Count -gt 1 -and $els[1] -is [System.Management.Automation.Language.StringConstantExpressionAst]) { $target = $els[1].Value }
+      if (-not $target -or $target.TrimEnd('/') -ne $env:PNP_MCP_URL.TrimEnd('/')) {
+        Add-Risk $real "connects to a site other than the configured one ($($env:PNP_MCP_URL))"
+      }
     }
   }
   foreach ($m in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.InvokeMemberExpressionAst] }, $true)) {
@@ -64,6 +81,15 @@ try {
   if ($risky.Count -gt 0 -and -not $confirmed) {
     [pscustomobject]@{ confirmationRequired = $true; actions = @($risky) } | ConvertTo-Json -Depth 4 -Compress
     exit 3
+  }
+
+  $hasConnect = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Connect-PnPOnline' }, $true).Count -gt 0
+  if ($env:PNP_MCP_URL -and -not $hasConnect) {
+    $cp = @{ Url = $env:PNP_MCP_URL; Interactive = $true }
+    if ($env:PNP_MCP_CLIENTID) { $cp.ClientId = $env:PNP_MCP_CLIENTID }
+    if ($env:PNP_MCP_TENANT) { $cp.Tenant = $env:PNP_MCP_TENANT }
+    try { Connect-PnPOnline @cp | Out-Null }
+    catch { throw "[AUTO_CONNECT_FAILED] $($_.Exception.Message)" }
   }
 
   $r = @(Invoke-Expression $expr 3>&1 | ForEach-Object {

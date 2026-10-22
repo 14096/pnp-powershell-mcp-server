@@ -96,6 +96,39 @@ func TestRunScriptRiskDetection(t *testing.T) {
 	}
 }
 
+func TestRunScriptTokenAndSiteSwitchRisk(t *testing.T) {
+	if _, err := exec.LookPath("pwsh"); err != nil {
+		t.Skip("pwsh not available")
+	}
+	ctx := context.Background()
+	if r, err := (Exec{}).Run(ctx, VersionScript, nil, time.Minute); err != nil || r.ExitCode != 0 {
+		t.Skip("PnP.PowerShell not installed")
+	}
+	const site = "https://contoso.sharepoint.com"
+	cases := []struct {
+		expr  string
+		url   string
+		risky bool
+	}{
+		{"Get-PnPAccessToken", "", true},
+		{"Get-PnPConnection", "", true},
+		{"Connect-PnPOnline -Url https://evil.sharepoint.com -Interactive", site, true},
+		{"Connect-PnPOnline https://evil.sharepoint.com -Interactive", site, true},
+		{"Connect-PnPOnline -Url $u -Interactive", site, true},
+		{"Connect-PnPOnline -Url https://evil.sharepoint.com -Interactive", "", false},
+	}
+	for _, tt := range cases {
+		env := map[string]string{EnvExpression: tt.expr, EnvConnectURL: tt.url}
+		r, err := (Exec{}).Run(ctx, RunScript, env, time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := r.ExitCode == ExitConfirmationRequired; got != tt.risky {
+			t.Errorf("%q (url=%q): risky=%v want %v; out=%q", tt.expr, tt.url, got, tt.risky, r.Stdout)
+		}
+	}
+}
+
 func TestCappedBuffer(t *testing.T) {
 	var b cappedBuffer
 	chunk := make([]byte, MaxCapture/2+1)

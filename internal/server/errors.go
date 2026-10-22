@@ -37,6 +37,11 @@ func prettyError(exitCode int, stderr string) string {
 	switch {
 	case strings.HasPrefix(details, "[UNKNOWN_CMDLET]"), strings.HasPrefix(details, "[UNKNOWN_PARAMETER]"), strings.HasPrefix(details, "Syntax error"):
 		return tagError + details
+	case strings.HasPrefix(details, "[AUTO_CONNECT_FAILED]"):
+		return tagError + "Automatic connection failed: the persisted login is missing or expired.\n\n" +
+			"Sign in once in a PowerShell 7 terminal, using the same URL and client ID the server is configured with:\n\n" +
+			"  Connect-PnPOnline -Url \"<url>\" -Interactive -ClientId \"<app-id>\" -PersistLogin\n\n" +
+			"Then retry.\n\nDetails: " + firstLine(strings.TrimPrefix(details, "[AUTO_CONNECT_FAILED]"))
 	case notConnectedRe.MatchString(stderr):
 		return tagError + "Not connected to SharePoint / Microsoft 365.\n\n" + connectHelp
 	case tokenExpiredRe.MatchString(stderr):
