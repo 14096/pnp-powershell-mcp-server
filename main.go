@@ -40,6 +40,8 @@ func run() error {
 	connURL := flag.String("url", os.Getenv("PNP_MCP_URL"), "site URL to connect to automatically before every run, reusing a login persisted with Connect-PnPOnline -PersistLogin (env PNP_MCP_URL)")
 	connClient := flag.String("client-id", os.Getenv("PNP_MCP_CLIENTID"), "Entra ID app client ID for the automatic connection (env PNP_MCP_CLIENTID)")
 	connTenant := flag.String("tenant", os.Getenv("PNP_MCP_TENANT"), "tenant for the automatic connection (env PNP_MCP_TENANT)")
+	persistedSpec := flag.String("persisted-connections", os.Getenv("PNP_MCP_PERSISTED_CONNECTIONS"), `JSON array like [{"tenant":"contoso","clientId":"<app-id>","name":"optional-profile-name"}] (or @file) of tenants whose persisted login is reused when an expression runs Connect-PnPOnline -Url for them without -ClientId (env PNP_MCP_PERSISTED_CONNECTIONS)`)
+	strict := flag.Bool("strict-connections", os.Getenv("PNP_MCP_STRICT_CONNECTIONS") == "1", "refuse Connect-PnPOnline -Url to a tenant that is not in --persisted-connections instead of falling back to PnP's own token cache (env PNP_MCP_STRICT_CONNECTIONS=1)")
 	debug := flag.Bool("debug", false, "verbose logging to stderr (includes executed expressions)")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Usage = func() {
@@ -82,6 +84,16 @@ func run() error {
 			return fmt.Errorf("--url must be an absolute https URL, got %q", *connURL)
 		}
 		opts = append(opts, server.WithConnection(server.Connection{URL: *connURL, ClientID: *connClient, Tenant: *connTenant}))
+	}
+	persisted, err := server.ParsePersistedConnections(*persistedSpec)
+	if err != nil {
+		return fmt.Errorf("--persisted-connections: %w", err)
+	}
+	if len(persisted) > 0 {
+		opts = append(opts, server.WithPersistedConnections(persisted))
+	}
+	if *strict {
+		opts = append(opts, server.WithStrictConnections())
 	}
 	if *elicitation {
 		opts = append(opts, server.WithElicitation())

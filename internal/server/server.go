@@ -41,6 +41,8 @@ type Server struct {
 	progressInterval time.Duration
 	guide            string
 	conn             Connection
+	persisted        []PersistedConnection
+	strict           bool
 }
 
 type Option func(*Server)
@@ -54,6 +56,12 @@ type Connection struct {
 }
 
 func WithConnection(c Connection) Option { return func(s *Server) { s.conn = c } }
+
+func WithPersistedConnections(p []PersistedConnection) Option {
+	return func(s *Server) { s.persisted = p }
+}
+
+func WithStrictConnections() Option { return func(s *Server) { s.strict = true } }
 
 func WithGuide(md string) Option { return func(s *Server) { s.guide = md } }
 
@@ -73,6 +81,17 @@ func (s *Server) MCP(version string) *mcp.Server {
 		instr = strings.Replace(instr, "Authentication is NOT managed: call Connect-PnPOnline beforehand. ",
 			"The server connects automatically to "+s.conn.URL+" before every run using a persisted login: do NOT call Connect-PnPOnline and do not ask the user to connect. "+
 				"Only call Connect-PnPOnline yourself to target a different site. ", 1)
+	}
+	if len(s.persisted) > 0 {
+		tenants := make([]string, len(s.persisted))
+		names := make([]string, len(s.persisted))
+		for i, p := range s.persisted {
+			tenants[i] = p.Tenant
+			names[i] = p.Name
+		}
+		instr += " Persisted connections are configured for the tenants " + strings.Join(tenants, ", ") +
+			": a Connect-PnPOnline -Url to one of them (without -ClientId) automatically reuses the persisted login. " +
+			"Pass the optional profile argument of pnpRunCmdlet (a name from: " + strings.Join(names, ", ") + ") to pick one explicitly. "
 	}
 	srv := mcp.NewServer(
 		&mcp.Implementation{Name: "pnp-powershell-mcp-server", Version: version},

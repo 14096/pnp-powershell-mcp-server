@@ -5,6 +5,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.0.9] - 2026-10-25
+
+- Persisted connections: `--persisted-connections` (or `PNP_MCP_PERSISTED_CONNECTIONS`) takes a JSON array of `{"tenant","clientId"}` (or `@file`). When an expression runs `Connect-PnPOnline -Url` for a listed tenant without `-ClientId`, the server adds the configured client ID and `-Interactive` to reuse the persisted login. Unlisted tenants behave as before.
+- Persisted connections accept an optional `name`, and `pnpRunCmdlet` takes a `profile` argument to select one explicitly (unknown profiles fail with `[UNKNOWN_PROFILE]`).
+- `--strict-connections` (or `PNP_MCP_STRICT_CONNECTIONS=1`) refuses `Connect-PnPOnline -Url` to a tenant that is not in the persisted connections (`[TENANT_NOT_CONFIGURED]`). It only has an effect together with `--persisted-connections`.
+
 ## [0.0.8] - 2026-10-22
 
 - Optional automatic connection: `--url`, `--client-id` and `--tenant` (or `PNP_MCP_URL`, `PNP_MCP_CLIENTID`, `PNP_MCP_TENANT`) make `pnpRunCmdlet` connect to the site before every run, reusing a login persisted with `Connect-PnPOnline -PersistLogin`. Without `--url` behaviour is unchanged.

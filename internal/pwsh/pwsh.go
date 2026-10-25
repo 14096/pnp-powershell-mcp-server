@@ -36,6 +36,9 @@ const (
 	EnvConnectURL      = "PNP_MCP_URL"
 	EnvConnectClientID = "PNP_MCP_CLIENTID"
 	EnvConnectTenant   = "PNP_MCP_TENANT"
+	EnvPersisted       = "PNP_MCP_PERSISTED"
+	EnvProfile         = "PNP_MCP_PROFILE"
+	EnvStrict          = "PNP_MCP_STRICT"
 )
 
 const ExitConfirmationRequired = 3

@@ -92,6 +92,52 @@ try {
     catch { throw "[AUTO_CONNECT_FAILED] $($_.Exception.Message)" }
   }
 
+  $persisted = @()
+  if ($env:PNP_MCP_PERSISTED) { $persisted = @($env:PNP_MCP_PERSISTED | ConvertFrom-Json) }
+  if ($persisted.Count -gt 0) {
+    function Get-McpTenant([string]$u) {
+      if (-not $u) { return $null }
+      try { $uri = [Uri]$u } catch { return $null }
+      if ($uri.Scheme -ne 'https') { return $null }
+      if ($uri.Host -match '^([a-z0-9-]+?)(-admin|-my)?\.sharepoint\.com$') { return $Matches[1] }
+    }
+    function Connect-PnPOnline {
+      $interactiveAuth = 'Interactive', 'DeviceLogin'
+      $otherAuth = 'ManagedIdentity', 'UserAssignedManagedIdentity', 'CertificatePath', 'CertificateBase64Encoded', 'Thumbprint', 'ClientSecret', 'Credentials', 'AccessToken', 'EnvironmentVariable', 'WebLogin', 'UseWebLogin', 'OSLogin', 'AzureADWorkloadIdentity', 'SystemAssignedManagedIdentity'
+      $url = $null; $hasClient = $false; $hasInteractive = $false; $hasOther = $false
+      for ($i = 0; $i -lt $args.Count; $i++) {
+        $x = "$($args[$i])"
+        if ($x -match '^-(\w+)(?::(.*))?$') {
+          $p = $Matches[1]; $v = $Matches[2]
+          if ($p -eq 'Url') { $url = if ($v) { $v } elseif ($i + 1 -lt $args.Count) { "$($args[$i + 1])" } }
+          elseif ($p -in 'ClientId', 'ApplicationId') { $hasClient = $true }
+          elseif ($interactiveAuth -contains $p) { $hasInteractive = $true }
+          elseif ($otherAuth -contains $p) { $hasOther = $true }
+        } elseif ($i -eq 0) { $url = $x }
+      }
+      $extra = @{}
+      $tenant = Get-McpTenant $url
+      if ($env:PNP_MCP_PROFILE -and -not $hasClient -and -not $hasOther) {
+        $m = $persisted | Where-Object { $_.name -eq $env:PNP_MCP_PROFILE } | Select-Object -First 1
+        if (-not $m) { throw "[UNKNOWN_PROFILE] '$($env:PNP_MCP_PROFILE)' is not a configured persisted connection. Configured: $(($persisted | ForEach-Object { $_.name }) -join ', ')." }
+        $extra.ClientId = $m.clientId
+        if (-not $hasInteractive) { $extra.Interactive = $true }
+      } elseif ($tenant -and -not $hasClient -and -not $hasOther) {
+        $m = $persisted | Where-Object { $_.tenant -eq $tenant } | Select-Object -First 1
+        if (-not $m) {
+          if ($env:PNP_MCP_STRICT -eq '1') {
+            throw "[TENANT_NOT_CONFIGURED] Tenant '$tenant' has no persisted connection in the server configuration (configured: $(($persisted | ForEach-Object { $_.tenant }) -join ', ')) and strict connections are on. Add it to --persisted-connections or pass -ClientId explicitly."
+          }
+        }
+        if ($m) {
+          $extra.ClientId = $m.clientId
+          if (-not $hasInteractive) { $extra.Interactive = $true }
+        }
+      }
+      & (Get-Command Connect-PnPOnline -CommandType Cmdlet) @args @extra
+    }
+  }
+
   $r = @(Invoke-Expression $expr 3>&1 | ForEach-Object {
     if ($_ -is [System.Management.Automation.WarningRecord]) { [Console]::Error.WriteLine("WARNING: " + $_.Message); [Console]::Error.Flush() } else { $_ }
   })

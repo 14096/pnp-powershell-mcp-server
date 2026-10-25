@@ -105,6 +105,7 @@ type runArgs struct {
 	TimeoutSec        int    `json:"timeoutSec,omitempty" jsonschema:"timeout in seconds (default 120, max 900)"`
 	MaxChars          int    `json:"maxChars,omitempty" jsonschema:"max characters of output to return (default 30000, max 200000); longer output is truncated with a notice"`
 	Offset            int    `json:"offset,omitempty" jsonschema:"page start: item index for JSON array output, character offset otherwise. Use the offset named in a [TRUNCATED] notice to fetch the next page; the expression is re-run"`
+	Profile           string `json:"profile,omitempty" jsonschema:"name of a configured persisted connection to use for Connect-PnPOnline calls without -ClientId (default: matched by the site URL tenant)"`
 	ConfirmationToken string `json:"confirmationToken,omitempty" jsonschema:"token from a previous [CONFIRMATION REQUIRED] response; only pass it after the user explicitly approved"`
 }
 
@@ -131,7 +132,7 @@ func (s *Server) runCmdlet(ctx context.Context, req *mcp.CallToolRequest, a runA
 	}
 	confirmed := answer == approved || (a.ConfirmationToken != "" && s.tokens.redeem(a.ConfirmationToken, a.Expression))
 	s.log.Debug("running expression", "expression", a.Expression, "confirmed", confirmed, "timeout", timeout)
-	res, err := s.exec(ctx, req, a.Expression, confirmed, timeout)
+	res, err := s.exec(ctx, req, a.Expression, a.Profile, confirmed, timeout)
 	if err != nil {
 		return s.execFailure(err, timeout)
 	}
@@ -153,7 +154,7 @@ func (s *Server) runCmdlet(ctx context.Context, req *mcp.CallToolRequest, a runA
 			case declined:
 				return resultWith(tagCancelled, runOut{Cancelled: true})
 			case approved:
-				if res, err = s.exec(ctx, req, a.Expression, true, timeout); err != nil {
+				if res, err = s.exec(ctx, req, a.Expression, a.Profile, true, timeout); err != nil {
 					return s.execFailure(err, timeout)
 				}
 			}
@@ -369,14 +370,25 @@ func (s *Server) execFailure(err error, timeout time.Duration) (*mcp.CallToolRes
 	return fail("%v", err)
 }
 
-func (s *Server) exec(ctx context.Context, req *mcp.CallToolRequest, expr string, confirmed bool, timeout time.Duration) (pwsh.Result, error) {
+func (s *Server) exec(ctx context.Context, req *mcp.CallToolRequest, expr, profile string, confirmed bool, timeout time.Duration) (pwsh.Result, error) {
 	env := map[string]string{pwsh.EnvExpression: expr}
 	if confirmed {
 		env[pwsh.EnvConfirmed] = "1"
 	}
+	if profile = strings.TrimSpace(profile); profile != "" {
+		env[pwsh.EnvProfile] = strings.ToLower(profile)
+	}
+	if s.strict {
+		env[pwsh.EnvStrict] = "1"
+	}
 	env[pwsh.EnvConnectURL] = s.conn.URL
 	env[pwsh.EnvConnectClientID] = s.conn.ClientID
 	env[pwsh.EnvConnectTenant] = s.conn.Tenant
+	if len(s.persisted) > 0 {
+		if b, err := json.Marshal(s.persisted); err == nil {
+			env[pwsh.EnvPersisted] = string(b)
+		}
+	}
 	defer s.reportProgress(ctx, req, timeout)()
 	return s.runner.Run(ctx, pwsh.RunScript, env, timeout)
 }

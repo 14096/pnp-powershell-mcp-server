@@ -202,13 +202,13 @@ cmdlet search and docs; for real tenant access use the local binary.
 
 ## Tools
 
-| Tool                | Purpose                                                                                              |
-| ------------------- | ---------------------------------------------------------------------------------------------------- |
-| `pnpSearchCmdlets`  | Ranked keyword search over installed cmdlets, optional `verb`/`noun` filters, related cmdlets        |
-| `pnpGetCmdletDocs`  | Current docs for a cmdlet (online, falls back to local `Get-Help`)                                   |
-| `pnpRunCmdlet`      | Run an expression in a fresh `pwsh`; names are validated and risky operations need your confirmation |
-| `pnpRefreshCmdlets` | Rebuild the catalog; `update: true` installs the latest module first                                 |
-| `pnpGetModuleInfo`  | Installed version, catalog status                                                                    |
+| Tool                | Purpose                                                                                                                                                  |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpSearchCmdlets`  | Ranked keyword search over installed cmdlets, optional `verb`/`noun` filters, related cmdlets                                                            |
+| `pnpGetCmdletDocs`  | Current docs for a cmdlet (online, falls back to local `Get-Help`)                                                                                       |
+| `pnpRunCmdlet`      | Run an expression in a fresh `pwsh`; names are validated and risky operations need your confirmation (optional `profile` selects a persisted connection) |
+| `pnpRefreshCmdlets` | Rebuild the catalog; `update: true` installs the latest module first                                                                                     |
+| `pnpGetModuleInfo`  | Installed version, catalog status                                                                                                                        |
 
 Recommended flow: search -> docs -> run.
 
@@ -348,6 +348,71 @@ URL.
   user, so register the app with least-privilege permissions.
 - Whether `-PersistLogin` survives across processes depends on your
   PnP.PowerShell version and OS.
+
+### Optional: persisted connections
+
+If you work with multiple tenants, list them with their client IDs using
+`--persisted-connections`. The value is a JSON array, provided in one of three ways.
+
+**1. Inline**, as the value of `--persisted-connections` (quotes must be escaped
+inside the client's JSON config):
+
+```json
+"command": ["/path/to/pnp-powershell-mcp-server", "--persisted-connections", "[{\"name\":\"contoso-prod\",\"tenant\":\"contoso\",\"clientId\":\"<app-id>\"}]"]
+```
+
+**2. From a file**, by prefixing the path with `@`. This is easier to read and
+edit, and avoids escaping. Create a file, for example
+`~/.config/pnp-powershell-mcp-server/connections.json`:
+
+```json
+[
+  { "tenant": "contoso", "clientId": "<app-id>" },
+  {
+    "name": "fabrikam-prod",
+    "tenant": "fabrikam",
+    "clientId": "<other-app-id>"
+  }
+]
+```
+
+and point the server to it:
+
+```json
+"command": ["/path/to/pnp-powershell-mcp-server", "--persisted-connections", "@/home/me/.config/pnp-powershell-mcp-server/connections.json"]
+```
+
+Use an absolute path; the file is read when the server starts, so restart the
+server after editing it.
+
+**3. Environment variable:** set `PNP_MCP_PERSISTED_CONNECTIONS` to either the
+inline JSON or the `@/path/to/file.json` form.
+
+Each entry uses the tenant name only (`contoso`, not a URL) and the client ID of
+the app used for `-PersistLogin`.
+
+- When an expression runs `Connect-PnPOnline -Url <site>` without `-ClientId`,
+  and the site's tenant is in the list (`contoso.sharepoint.com`,
+  `contoso-admin.sharepoint.com` and `contoso-my.sharepoint.com` all match
+  `contoso`; `https` only), the server adds the configured `-ClientId` and
+  `-Interactive` so the persisted login is reused.
+- The injection happens without a notice in the result.
+- No match, an explicit `-ClientId`, or another auth method (certificate, managed
+  identity, ...) leaves the command untouched, so the normal flow applies and you
+  are asked to connect if there is no valid login.
+- The list holds no secrets, only tenant names and client IDs.
+- Entries may have an optional `name` (default: the tenant). Pass it as the
+  `profile` argument of `pnpRunCmdlet` to pick that connection explicitly. The
+  profile takes precedence over the tenant match: it applies to any
+  `Connect-PnPOnline` call without `-ClientId`, whatever the site URL. An unknown
+  profile fails with `[UNKNOWN_PROFILE]`.
+- A tenant that is not listed still works (PnP.PowerShell may reuse a login from
+  its own token cache). Use `--strict-connections` (or
+  `PNP_MCP_STRICT_CONNECTIONS=1`) to refuse such connections with
+  `[TENANT_NOT_CONFIGURED]`. Strict mode only has an effect when
+  `--persisted-connections` is set.
+- This applies to connections made by your expressions. The automatic connection
+  (`--url`) is made before the expression runs and is not affected.
 
 See [best-practices.md](best-practices.md) for device login, certificate and
 managed identity options. Never put credentials in expressions.
