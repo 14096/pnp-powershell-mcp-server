@@ -87,6 +87,10 @@ type refreshOut struct {
 	Version         string `json:"version,omitempty"`
 	PreviousVersion string `json:"previousVersion,omitempty"`
 	CmdletCount     int    `json:"cmdletCount,omitempty"`
+
+	ConfirmationRequired bool   `json:"confirmationRequired,omitempty" jsonschema:"true when nothing ran because the user must confirm the update"`
+	ConfirmationToken    string `json:"confirmationToken,omitempty" jsonschema:"single-use token to pass after the user approved"`
+	Cancelled            bool   `json:"cancelled,omitempty" jsonschema:"true when the user declined"`
 }
 
 type moduleOut struct {
@@ -307,10 +311,52 @@ func (s *Server) searchCmdlets(ctx context.Context, _ *mcp.CallToolRequest, a se
 }
 
 type refreshArgs struct {
-	Update bool `json:"update,omitempty" jsonschema:"also install the latest PnP.PowerShell from PSGallery before refreshing"`
+	Update            bool   `json:"update,omitempty" jsonschema:"also install the latest PnP.PowerShell from PSGallery before refreshing; requires the user's confirmation"`
+	ConfirmationToken string `json:"confirmationToken,omitempty" jsonschema:"token from a previous [CONFIRMATION REQUIRED] response; only pass it after the user explicitly approved"`
 }
 
-func (s *Server) refreshCmdlets(ctx context.Context, _ *mcp.CallToolRequest, a refreshArgs) (*mcp.CallToolResult, any, error) {
+const (
+	updateKey     = "pnpRefreshCmdlets update=true"
+	updateSummary = "- Install PnP.PowerShell from PSGallery: downloads and installs the latest module version, third-party code that then runs with your permissions"
+)
+
+func (s *Server) confirmUpdate(ctx context.Context, req *mcp.CallToolRequest, token string) (r *mcp.CallToolResult, out any, proceed bool) {
+	switch s.userDecision(req, updateKey) {
+	case declined:
+		r, out, _ = resultWith(tagCancelled, refreshOut{Cancelled: true})
+		return r, out, false
+	case approved:
+		return nil, nil, true
+	}
+	if token != "" && s.tokens.redeem(token, updateKey) {
+		return nil, nil, true
+	}
+	if s.canElicit(req) && !s.elicitationDisabled(req) {
+		prompt := confirmationPrompt(updateSummary, updateKey)
+		if s.useMultiRoundTrip(req) {
+			return &mcp.CallToolResult{InputRequests: mcp.InputRequestMap{elicitKey: prompt}, RequestState: s.sign(updateKey)}, nil, false
+		}
+		switch s.askUser(ctx, req, prompt) {
+		case declined:
+			r, out, _ = resultWith(tagCancelled, refreshOut{Cancelled: true})
+			return r, out, false
+		case approved:
+			return nil, nil, true
+		}
+	}
+	tok := s.tokens.issue(updateKey)
+	r, _, _ = ok(fmt.Sprintf("[CONFIRMATION REQUIRED] Nothing was executed. Updating installs code from PSGallery:\n%s\n\n"+
+		"Show this to the user and ask for an explicit yes/no in the conversation. Only if they clearly approve, call pnpRefreshCmdlets again "+
+		"with update=true and confirmationToken %q (valid %d minutes, single use).", updateSummary, tok, int(confirmationTTL.Minutes())))
+	return r, refreshOut{ConfirmationRequired: true, ConfirmationToken: tok}, false
+}
+
+func (s *Server) refreshCmdlets(ctx context.Context, req *mcp.CallToolRequest, a refreshArgs) (*mcp.CallToolResult, any, error) {
+	if a.Update {
+		if r, out, proceed := s.confirmUpdate(ctx, req, a.ConfirmationToken); !proceed {
+			return r, out, nil
+		}
+	}
 	var oldVersion string
 	if c := s.store.Current(); c != nil {
 		oldVersion = c.Version

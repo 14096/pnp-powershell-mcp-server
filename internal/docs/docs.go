@@ -60,8 +60,8 @@ func (c *Client) Fetch(ctx context.Context, cmdlet, version string) (string, err
 		}
 		return "", err
 	}
-	if path != "" && os.MkdirAll(filepath.Dir(path), 0o755) == nil {
-		_ = os.WriteFile(path, []byte(md), 0o644)
+	if path != "" && os.MkdirAll(filepath.Dir(path), 0o700) == nil {
+		_ = os.WriteFile(path, []byte(md), 0o600)
 	}
 	return md, nil
 }

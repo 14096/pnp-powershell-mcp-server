@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 	"unicode/utf16"
 )
@@ -73,14 +74,54 @@ type Runner interface {
 	Run(ctx context.Context, script string, env map[string]string, timeout time.Duration) (Result, error)
 }
 
-type Exec struct{}
+type Exec struct{ ExtraEnv []string }
 
-func (Exec) Run(ctx context.Context, script string, env map[string]string, timeout time.Duration) (Result, error) {
+var inheritedNames = map[string]bool{
+	"PATH": true, "HOME": true, "USER": true, "LOGNAME": true, "SHELL": true, "TERM": true, "LANG": true, "LANGUAGE": true,
+	"TMPDIR": true, "TEMP": true, "TMP": true, "PSMODULEPATH": true, "TZ": true,
+	"HTTP_PROXY": true, "HTTPS_PROXY": true, "NO_PROXY": true, "ALL_PROXY": true,
+	"SSL_CERT_FILE": true, "SSL_CERT_DIR": true,
+	"IDENTITY_ENDPOINT": true, "IDENTITY_HEADER": true, "MSI_ENDPOINT": true, "MSI_SECRET": true,
+	"SYSTEMROOT": true, "SYSTEMDRIVE": true, "WINDIR": true, "USERPROFILE": true, "APPDATA": true, "LOCALAPPDATA": true,
+	"PROGRAMDATA": true, "PROGRAMFILES": true, "PROGRAMFILES(X86)": true, "PROGRAMW6432": true, "COMMONPROGRAMFILES": true,
+	"ALLUSERSPROFILE": true, "PUBLIC": true, "COMPUTERNAME": true, "USERNAME": true, "USERDOMAIN": true, "OS": true,
+	"PATHEXT": true, "COMSPEC": true, "HOMEDRIVE": true, "HOMEPATH": true, "NUMBER_OF_PROCESSORS": true,
+	"PROCESSOR_ARCHITECTURE": true,
+}
+
+var inheritedPrefixes = []string{"LC_", "XDG_", "DOTNET_", "POWERSHELL_"}
+
+func inheritedEnv(environ, extra []string) []string {
+	allowed := map[string]bool{}
+	for _, n := range extra {
+		if n = strings.ToUpper(strings.TrimSpace(n)); n != "" {
+			allowed[n] = true
+		}
+	}
+	var out []string
+	for _, kv := range environ {
+		name, _, ok := strings.Cut(kv, "=")
+		if !ok || name == "" {
+			continue
+		}
+		up := strings.ToUpper(name)
+		keep := inheritedNames[up] || allowed[up]
+		for _, p := range inheritedPrefixes {
+			keep = keep || strings.HasPrefix(up, p)
+		}
+		if keep {
+			out = append(out, kv)
+		}
+	}
+	return out
+}
+
+func (e Exec) Run(ctx context.Context, script string, env map[string]string, timeout time.Duration) (Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "pwsh", "-NoProfile", "-NonInteractive", "-NoLogo", "-EncodedCommand", encode(script))
-	cmd.Env = os.Environ()
+	cmd.Env = inheritedEnv(os.Environ(), e.ExtraEnv)
 	for k, v := range env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}

@@ -75,8 +75,30 @@ func TestRunScriptRiskDetection(t *testing.T) {
 		"Invoke-WebRequest http://example.com",
 		"& $cmd",
 		"$item.DeleteObject()",
+		"[System.IO.File]::WriteAllText('/tmp/x','y')",
+		"[System.Diagnostics.Process]::Start('id')",
+		"[scriptblock]::Create('Get-Date').Invoke()",
+		"$ExecutionContext.InvokeCommand.InvokeScript('Get-Date')",
+		"Set-Alias zz Get-Date; zz",
+		"New-Object Net.WebClient",
+		"Get-Content ~/.ssh/id_rsa",
+		"Get-ChildItem Env:",
+		"$env:HOME",
+		"Import-Module /tmp/evil.dll",
+		"Export-Csv -Path /tmp/x",
+		"Install-Module Foo",
+		"Get-PnPList | ForEach-Object Delete",
+		"Grant-PnPAzureADAppSitePermission -Permissions FullControl",
+		"Add-PnPSiteCollectionAdmin -Owners a@b.c",
+		"Set-PnPTenant -SharingCapability Disabled",
+		"Set-PnPSite -SharingCapability Disabled",
 	}
-	safe := []string{"Get-Date", "'x' | ConvertTo-Json", "Get-PnPList -Identity x -ErrorAction SilentlyContinue"}
+	safe := []string{
+		"Get-Date", "'x' | ConvertTo-Json", "Get-PnPList -Identity x -ErrorAction SilentlyContinue",
+		"Get-PnPList | Where-Object { $_.Title -like 'a*' } | Select-Object Title | ConvertTo-Json",
+		"[math]::Round(1.5); [string]::Join(',', 'a','b'); 'a'.Trim()",
+		"$l = [System.Collections.Generic.List[string]]::new(); $l.Add('x'); $l | Sort-Object | Out-String",
+	}
 
 	for _, expr := range risky {
 		r, err := (Exec{}).Run(ctx, RunScript, map[string]string{EnvExpression: expr}, time.Minute)
@@ -156,5 +178,23 @@ func TestRunScriptWarningsGoToStderr(t *testing.T) {
 	}
 	if strings.TrimSpace(r.Stdout) != "result" || !strings.Contains(r.Stderr, "WARNING: careful") {
 		t.Errorf("stdout=%q stderr=%q", r.Stdout, r.Stderr)
+	}
+}
+
+func TestInheritedEnv(t *testing.T) {
+	environ := []string{"PATH=/bin", "HOME=/h", "LC_ALL=C", "XDG_DATA_HOME=/d", "GITHUB_TOKEN=secret", "AWS_SECRET_ACCESS_KEY=s", "AZURE_CLIENT_SECRET=s2", "NOEQUALS"}
+	got := strings.Join(inheritedEnv(environ, nil), " ")
+	for _, want := range []string{"PATH=/bin", "HOME=/h", "LC_ALL=C", "XDG_DATA_HOME=/d"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("%q should be inherited: %s", want, got)
+		}
+	}
+	for _, bad := range []string{"GITHUB_TOKEN", "AWS_SECRET", "AZURE_CLIENT_SECRET", "NOEQUALS"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("%q must not be inherited: %s", bad, got)
+		}
+	}
+	if got := strings.Join(inheritedEnv(environ, []string{" azure_client_secret "}), " "); !strings.Contains(got, "AZURE_CLIENT_SECRET=s2") {
+		t.Errorf("extra names should be passed through: %s", got)
 	}
 }

@@ -129,8 +129,9 @@ as they add noise to the output stream.
 - **Avoid destructive operations without confirmation** — cmdlets such as
   `Remove-PnPList`, `Remove-PnPSite`, etc. are irreversible. `pnpRunCmdlet`
   never runs them (or other risky operations such as `Invoke-Expression`,
-  write calls via `Invoke-PnPSPRestMethod -Method Delete`, `.DeleteObject()`)
-  without the user's explicit confirmation. If you get
+  write calls via `Invoke-PnPSPRestMethod -Method Delete`, `.DeleteObject()`,
+  privilege changes like `Grant-PnP*`, local file access, `$env:` reads, or any
+  command outside PnP.PowerShell and the basic formatting cmdlets) without the user's explicit confirmation. If you get
   `[CONFIRMATION REQUIRED]`, show the user exactly what will happen, ask for a
   clear yes/no, and only then retry with the same expression and the returned
   `confirmationToken`. Never ask for or reuse a token without asking the user.

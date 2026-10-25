@@ -6,6 +6,11 @@ $destructiveVerbs = 'Remove','Clear','Reset','Revoke','Unpublish','Uninstall','U
 $dangerousCommands = 'Invoke-Expression','Invoke-Command','Start-Process','Invoke-WebRequest','Invoke-RestMethod','Add-Type','Set-Content','Out-File','Add-Content','Move-Item','Copy-Item','New-Item','Set-ExecutionPolicy'
 $writeApiCommands = 'Invoke-PnPSPRestMethod','Invoke-PnPGraphMethod','Invoke-PnPBatch'
 $tokenCommands = 'Get-PnPAccessToken','Get-PnPConnection'
+$safeCommands = 'Select-Object','Where-Object','ForEach-Object','Sort-Object','Group-Object','Measure-Object','Format-Table','Format-List','Format-Wide','Format-Custom','Out-String','Out-Null','Out-Default','ConvertTo-Json','ConvertFrom-Json','ConvertTo-Csv','ConvertFrom-Csv','Get-Date','New-TimeSpan','Write-Output','Write-Host','Write-Warning','Write-Verbose','Write-Information','Write-Error','Get-Unique','Compare-Object','Join-String','Get-Member','Start-Sleep','Get-Random'
+$privilegeCommands = 'Grant-PnP*','Register-PnP*','Set-PnPTenant*','Set-PnP*Permission*','Add-PnPSiteCollectionAdmin','Add-PnP*GroupOwner','Add-PnPApp','Publish-PnPApp','Install-PnPApp'
+$privilegeParams = 'SharingCapability','DefaultSharingLinkType','DefaultLinkPermission','DisableSharingForNonOwners'
+$safeTypes = 'math','string','datetime','datetimeoffset','timespan','guid','int','int32','int64','long','double','decimal','bool','boolean','char','byte','single','float','regex','uri','convert','array','version','psobject','pscustomobject','ordered','system.math','system.string','system.datetime','system.datetimeoffset','system.timespan','system.guid','system.uri','system.convert','system.array','system.version','system.int32','system.int64','system.double','system.decimal','system.boolean','system.char','system.text.regularexpressions.regex','net.webutility','system.net.webutility'
+$riskyMethods = '^(Delete|DeleteObject|Recycle|Remove|Clear|Create|Invoke|InvokeScript|InvokeReturnAsIs|NewScriptBlock|ExpandString|GetNewClosure|Download|Upload|Open|Start|Load|Write|Kill)'
 try {
   Import-Module PnP.PowerShell -ErrorAction Stop
   $errs=$null; $tokens=$null
@@ -27,6 +32,7 @@ try {
     }
 
     if ($real -match '^[A-Za-z]+-PnP') {
+      if ($info -and $info.ModuleName -ne 'PnP.PowerShell') { Add-Risk $real 'resolves to a command that is not part of PnP.PowerShell' }
       if (-not $info) { throw "[UNKNOWN_CMDLET] '$n' does not exist in the installed PnP.PowerShell. Use pnpSearchCmdlets to find the right name (or pnpRefreshCmdlets)." }
       foreach ($e in $c.CommandElements) {
         if ($e -is [System.Management.Automation.Language.CommandParameterAst]) {
@@ -36,6 +42,8 @@ try {
           $hit = $cmdInfo.Parameters.Keys | Where-Object { $_ -like "$p*" }
           $hit2 = $cmdInfo.Parameters.Values | Where-Object { $_.Aliases -contains $p }
           if (-not $hit -and -not $hit2) { throw "[UNKNOWN_PARAMETER] '-$p' is not valid for $($cmdInfo.Name). Call pnpGetCmdletDocs for '$($cmdInfo.Name)' to check the syntax." }
+          $resolved = @($hit) + @($hit2 | ForEach-Object { $_.Name })
+          if ($resolved | Where-Object { $privilegeParams -contains $_ }) { Add-Risk $real "changes a sharing or permission setting (-$p)" }
         }
       }
     }
@@ -71,11 +79,41 @@ try {
       if (-not $target -or $target.TrimEnd('/') -ne $env:PNP_MCP_URL.TrimEnd('/')) {
         Add-Risk $real "connects to a site other than the configured one ($($env:PNP_MCP_URL))"
       }
+    } elseif ($privilegeCommands | Where-Object { $real -like $_ }) {
+      Add-Risk $real 'changes permissions, tenant-wide settings or deploys apps (privilege change)'
+    } elseif ($real -notmatch '^[A-Za-z]+-PnP' -and $safeCommands -notcontains $real) {
+      Add-Risk $real 'is not on the list of safe commands (it may read local files or secrets, change the system or run code)'
+    }
+    if ($real -eq 'ForEach-Object') {
+      $els = @($c.CommandElements)
+      for ($i = 1; $i -lt $els.Count; $i++) {
+        $e = $els[$i]
+        if ($e -is [System.Management.Automation.Language.StringConstantExpressionAst] -or
+            ($e -is [System.Management.Automation.Language.CommandParameterAst] -and 'MemberName' -like "$($e.ParameterName)*")) {
+          Add-Risk $c.Extent.Text 'calls a method or reads a member by name'
+          break
+        }
+      }
     }
   }
-  foreach ($m in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.InvokeMemberExpressionAst] }, $true)) {
-    $name = $m.Member.Extent.Text
-    if ($name -match '^(Delete|DeleteObject|Recycle|Remove|Clear)') { Add-Risk $m.Extent.Text "method call .$name() may delete data" }
+  foreach ($m in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.MemberExpressionAst] }, $true)) {
+    $isCall = $m -is [System.Management.Automation.Language.InvokeMemberExpressionAst]
+    if ($m.Static) {
+      $typeName = if ($m.Expression -is [System.Management.Automation.Language.TypeExpressionAst]) { $m.Expression.TypeName.FullName.ToLowerInvariant() } else { $null }
+      if (-not $typeName) { Add-Risk $m.Extent.Text 'static member access on a type that is not known in advance' }
+      elseif ($safeTypes -notcontains $typeName -and -not $typeName.StartsWith('system.collections.')) { Add-Risk $m.Extent.Text "static .NET member on [$($m.Expression.TypeName.FullName)] (may run code, read or write files, or reach the network)" }
+      continue
+    }
+    if (-not $isCall) { continue }
+    if ($m.Member -isnot [System.Management.Automation.Language.StringConstantExpressionAst]) { Add-Risk $m.Extent.Text 'method call whose name is not known in advance'; continue }
+    $name = $m.Member.Value
+    if ($name -match $riskyMethods) { Add-Risk $m.Extent.Text "method call .$name() may delete data, run code or reach outside SharePoint" }
+  }
+  foreach ($v in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.VariableExpressionAst] }, $true)) {
+    $vp = $v.VariablePath
+    $user = $vp.UserPath -replace '^(global|script|local|private):', ''
+    if ($vp.DriveName -eq 'env') { Add-Risk $v.Extent.Text 'reads an environment variable (may expose secrets)' }
+    elseif ($user -in 'ExecutionContext', 'Host') { Add-Risk $v.Extent.Text 'accesses the PowerShell engine directly' }
   }
 
   if ($risky.Count -gt 0 -and -not $confirmed) {

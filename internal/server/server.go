@@ -19,7 +19,7 @@ import (
 
 const instructions = "Run PnP.PowerShell cmdlets. Authentication is NOT managed: call Connect-PnPOnline beforehand. " +
 	"Workflow: pnpSearchCmdlets -> pnpGetCmdletDocs -> pnpRunCmdlet. Always check docs before using a cmdlet; " +
-	"prefer ConvertTo-Json output. Destructive operations (Remove-*, Clear-*, DELETE calls, ...) require user confirmation: " +
+	"prefer ConvertTo-Json output. Risky operations (Remove-*, Clear-*, DELETE calls, privilege changes, local file or environment access, non-PnP commands, ...) require user confirmation: " +
 	"if pnpRunCmdlet returns [CONFIRMATION REQUIRED], show the user exactly what will happen, ask for an explicit yes/no in the conversation, " +
 	"and only after a clear yes call it again with the same expression and the confirmationToken. Never obtain or reuse a token without asking the user."
 
@@ -119,7 +119,7 @@ func (s *Server) MCP(version string) *mcp.Server {
 		Name:        "pnpRefreshCmdlets",
 		Title:       "Refresh cmdlet catalog",
 		Annotations: &mcp.ToolAnnotations{DestructiveHint: ptr(false), IdempotentHint: true, OpenWorldHint: ptr(true)},
-		Description: "Rebuild the cmdlet catalog from the installed module, optionally installing the latest version from PSGallery first.",
+		Description: "Rebuild the cmdlet catalog from the installed module, optionally installing the latest version from PSGallery first (update=true needs the user's confirmation).",
 	}, guard[refreshArgs, refreshOut](s, "pnpRefreshCmdlets", s.refreshCmdlets))
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "pnpGetModuleInfo",

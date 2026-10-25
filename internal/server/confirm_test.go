@@ -180,3 +180,38 @@ func TestUnansweredPromptFallsBackAndStopsAsking(t *testing.T) {
 		t.Errorf("must not prompt again in the same session: prompts=%d", prompts)
 	}
 }
+
+func TestUpdateRequiresConfirmation(t *testing.T) {
+	runner := &fakeRunner{res: pwsh.Result{Stdout: catalogJSON}}
+	s := newTestServer(t, "", runner)
+	ctx := context.Background()
+
+	r, out, _ := s.refreshCmdlets(ctx, nil, refreshArgs{Update: true})
+	ro, _ := out.(refreshOut)
+	if !ro.ConfirmationRequired || ro.ConfirmationToken == "" || !strings.Contains(text(t, r), "[CONFIRMATION REQUIRED]") {
+		t.Fatalf("update must ask first: %s", text(t, r))
+	}
+	if runner.script == pwsh.UpdateScript {
+		t.Fatal("update script ran without confirmation")
+	}
+
+	r, _, _ = s.refreshCmdlets(ctx, nil, refreshArgs{Update: true, ConfirmationToken: "bogus"})
+	if !strings.Contains(text(t, r), "[CONFIRMATION REQUIRED]") {
+		t.Errorf("a bad token must not authorise the update: %s", text(t, r))
+	}
+
+	runner.fn = func(map[string]string) pwsh.Result { return pwsh.Result{Stdout: catalogJSON} }
+	r, _, _ = s.refreshCmdlets(ctx, nil, refreshArgs{Update: true, ConfirmationToken: ro.ConfirmationToken})
+	if !strings.Contains(text(t, r), "Module update completed") {
+		t.Errorf("valid token should allow the update: %s", text(t, r))
+	}
+	r, _, _ = s.refreshCmdlets(ctx, nil, refreshArgs{Update: true, ConfirmationToken: ro.ConfirmationToken})
+	if !strings.Contains(text(t, r), "[CONFIRMATION REQUIRED]") {
+		t.Error("token must be single use")
+	}
+
+	r, _, _ = s.refreshCmdlets(ctx, nil, refreshArgs{})
+	if strings.Contains(text(t, r), "CONFIRMATION") {
+		t.Error("a plain refresh needs no confirmation")
+	}
+}

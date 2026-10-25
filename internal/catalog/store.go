@@ -152,8 +152,8 @@ func (s *Store) Rebuild(ctx context.Context) error {
 
 func (s *Store) writeCache(c *Catalog) {
 	b, err := json.Marshal(c)
-	if err != nil || os.MkdirAll(filepath.Dir(s.cacheFile), 0o755) != nil {
+	if err != nil || os.MkdirAll(filepath.Dir(s.cacheFile), 0o700) != nil {
 		return
 	}
-	_ = os.WriteFile(s.cacheFile, b, 0o644)
+	_ = os.WriteFile(s.cacheFile, b, 0o600)
 }

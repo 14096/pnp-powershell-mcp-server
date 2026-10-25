@@ -5,6 +5,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.0.10] - 2026-10-25
+
+- The risky-operation check now works as an allowlist: any command that is not a PnP.PowerShell cmdlet or a known-safe formatting cmdlet, any static .NET member call outside a small safe set (e.g. `[System.IO.File]::...`, `[Diagnostics.Process]::Start`), dynamic or code-running method calls (`[scriptblock]::Create(...)`, `.Invoke()`), `$env:` reads and `$ExecutionContext` access now require confirmation.
+- Privilege-changing cmdlets (`Grant-PnP*`, `Register-PnP*`, `Set-PnPTenant*`, `*Permission*`, site collection admin and owner changes, app deployment) and sharing parameters such as `-SharingCapability` now require confirmation.
+- PowerShell only inherits a safe subset of the environment (PATH, HOME, proxy and certificate settings, managed identity variables, ...). Use `--pass-env` (or `PNP_MCP_PASS_ENV`) with a comma-separated list of names to pass more, e.g. `AZURE_CLIENT_ID,AZURE_CLIENT_SECRET`.
+- `pnpRefreshCmdlets` with `update=true` now requires confirmation, like risky expressions.
+- Cache files are written with owner-only permissions (`0600`, directories `0700`). Cache files created by earlier versions keep their old mode until deleted or `chmod 600`.
+- Commands outside the safe list that used to run silently (for example `Get-Content`, `Get-ChildItem`, `Import-Module`, `Export-Csv`) now ask for confirmation first.
+
 ## [0.0.9] - 2026-10-25
 
 - Persisted connections: `--persisted-connections` (or `PNP_MCP_PERSISTED_CONNECTIONS`) takes a JSON array of `{"tenant","clientId"}` (or `@file`). When an expression runs `Connect-PnPOnline -Url` for a listed tenant without `-ClientId`, the server adds the configured client ID and `-Interactive` to reuse the persisted login. Unlisted tenants behave as before.

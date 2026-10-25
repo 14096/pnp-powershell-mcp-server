@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"runtime/debug"
+	"strings"
 	"syscall"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -21,6 +23,41 @@ import (
 
 var version = "dev"
 
+func resolveVersion() string {
+	if version != "dev" && version != "" {
+		return withV(version)
+	}
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return version
+	}
+	if v := info.Main.Version; v != "" && v != "(devel)" {
+		return v
+	}
+	var rev, dirty string
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			rev = s.Value
+		case "vcs.modified":
+			if s.Value == "true" {
+				dirty = "-dirty"
+			}
+		}
+	}
+	if len(rev) >= 7 {
+		return "dev-" + rev[:7] + dirty
+	}
+	return version
+}
+
+func withV(v string) string {
+	if v != "" && v[0] >= '0' && v[0] <= '9' {
+		return "v" + v
+	}
+	return v
+}
+
 //go:embed best-practices.md
 var guide string
 
@@ -32,6 +69,7 @@ func main() {
 }
 
 func run() error {
+	version = resolveVersion()
 	if len(os.Args) > 1 && os.Args[1] == "version" {
 		fmt.Println(version)
 		return nil
@@ -42,6 +80,7 @@ func run() error {
 	connTenant := flag.String("tenant", os.Getenv("PNP_MCP_TENANT"), "tenant for the automatic connection (env PNP_MCP_TENANT)")
 	persistedSpec := flag.String("persisted-connections", os.Getenv("PNP_MCP_PERSISTED_CONNECTIONS"), `JSON array like [{"tenant":"contoso","clientId":"<app-id>","name":"optional-profile-name"}] (or @file) of tenants whose persisted login is reused when an expression runs Connect-PnPOnline -Url for them without -ClientId (env PNP_MCP_PERSISTED_CONNECTIONS)`)
 	strict := flag.Bool("strict-connections", os.Getenv("PNP_MCP_STRICT_CONNECTIONS") == "1", "refuse Connect-PnPOnline -Url to a tenant that is not in --persisted-connections instead of falling back to PnP's own token cache (env PNP_MCP_STRICT_CONNECTIONS=1)")
+	passEnv := flag.String("pass-env", os.Getenv("PNP_MCP_PASS_ENV"), "comma-separated names of extra environment variables to pass to PowerShell (by default only a safe subset such as PATH and HOME is inherited), e.g. AZURE_CLIENT_ID,AZURE_CLIENT_SECRET (env PNP_MCP_PASS_ENV)")
 	debug := flag.Bool("debug", false, "verbose logging to stderr (includes executed expressions)")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Usage = func() {
@@ -64,7 +103,7 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	runner := pwsh.Exec{}
+	runner := pwsh.Exec{ExtraEnv: strings.Split(*passEnv, ",")}
 	go func() {
 		if d := pwsh.Diagnose(ctx, runner); !d.OK() {
 			for _, p := range d.Problems {

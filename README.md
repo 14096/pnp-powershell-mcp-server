@@ -37,7 +37,7 @@ To build from source, additionally: Go (see `go.mod`).
 git clone https://github.com/14096/pnp-powershell-mcp-server.git
 cd pnp-powershell-mcp-server
 make build        # -> bin/pnp-powershell-mcp-server
-bin/pnp-powershell-mcp-server version   # print the version
+bin/pnp-powershell-mcp-server version   # print the version, e.g. v0.0.10
 ```
 
 Or install straight from GitHub with Go (the binary lands in `$(go env GOPATH)/bin`):
@@ -207,7 +207,7 @@ cmdlet search and docs; for real tenant access use the local binary.
 | `pnpSearchCmdlets`  | Ranked keyword search over installed cmdlets, optional `verb`/`noun` filters, related cmdlets                                                            |
 | `pnpGetCmdletDocs`  | Current docs for a cmdlet (online, falls back to local `Get-Help`)                                                                                       |
 | `pnpRunCmdlet`      | Run an expression in a fresh `pwsh`; names are validated and risky operations need your confirmation (optional `profile` selects a persisted connection) |
-| `pnpRefreshCmdlets` | Rebuild the catalog; `update: true` installs the latest module first                                                                                     |
+| `pnpRefreshCmdlets` | Rebuild the catalog; `update: true` installs the latest module first and needs your confirmation                                                         |
 | `pnpGetModuleInfo`  | Installed version, catalog status                                                                                                                        |
 
 Recommended flow: search -> docs -> run.
@@ -244,6 +244,21 @@ conversation.
 
 What counts as risky:
 
+- Anything that is not a PnP.PowerShell cmdlet or a known-safe formatting
+  command (`Select-Object`, `Where-Object`, `ForEach-Object`, `Sort-Object`,
+  `ConvertTo-Json`, `Get-Date`, `Write-*`, ...). This covers local file access
+  (`Get-Content`, `Get-ChildItem`), `Import-Module`, `Set-Alias`, `New-Object`,
+  `Export-*` and similar
+- Static .NET calls outside a small safe set (`[math]`, `[string]`, `[guid]`,
+  `[uri]`, `[regex]`, ...), for example `[System.IO.File]::WriteAllText(...)` or
+  `[Diagnostics.Process]::Start(...)`, and method calls that run code or reach
+  outside SharePoint (`[scriptblock]::Create(...)`, `.Invoke()`, `.Download*()`)
+- Reading environment variables (`$env:...`) and `$ExecutionContext` / `$Host`
+- Privilege changes: `Grant-PnP*`, `Register-PnP*`, `Set-PnPTenant*`,
+  `Set-PnP*Permission*`, `Add-PnPSiteCollectionAdmin`, `Add-PnP*GroupOwner`,
+  app deployment (`Add-`/`Publish-`/`Install-PnPApp`) and sharing parameters such
+  as `-SharingCapability`
+- `pnpRefreshCmdlets` with `update: true` (installs code from PSGallery)
 - Destructive verbs: `Remove-*`, `Clear-*`, `Reset-*`, `Revoke-*`, `Unpublish-*`,
   `Uninstall-*`, `Unregister-*`, `Disable-*`, `Deny-*`, `Stop-*`, `Restart-*`, `Format-*`
   (aliases like `rm`/`del` are resolved)
@@ -276,9 +291,20 @@ How confirmation works:
 
 Declined requests never reach PowerShell. Read-only expressions run without any prompt.
 
-This is a safety net, not a sandbox: static analysis cannot catch everything
-(for example code hidden inside strings or scripts). Also:
+Approved expressions run with your full permissions. This is a safety net, not
+a sandbox: the check is an allowlist over the parsed expression, but static
+analysis can never be complete. Also:
 
+- The default conversational confirmation relies on the assistant following its
+  instructions, so content it reads (list items, files) could try to talk it into
+  approving. Prefer `--elicitation` where your client supports it.
+- **Environment:** PowerShell only inherits a safe subset of the server's
+  environment (`PATH`, `HOME`, temp, proxy and certificate settings, locale,
+  `XDG_*`, `DOTNET_*`, managed identity variables), so ambient secrets such as
+  cloud or API tokens are not readable by expressions. To pass more on purpose,
+  for example for `-EnvironmentVariable` authentication, use
+  `--pass-env AZURE_CLIENT_ID,AZURE_CLIENT_SECRET` (or `PNP_MCP_PASS_ENV`).
+- **Cache files** are written with owner-only permissions.
 - Use an Entra ID app with least-privilege permissions.
 - Don't run it against production tenants unattended.
 
@@ -414,8 +440,9 @@ the app used for `-PersistLogin`.
 - This applies to connections made by your expressions. The automatic connection
   (`--url`) is made before the expression runs and is not affected.
 
-See [best-practices.md](best-practices.md) for device login, certificate and
-managed identity options. Never put credentials in expressions.
+Authentication that reads secrets from environment variables needs those names in
+`--pass-env` (see Security). See [best-practices.md](best-practices.md) for device
+login, certificate and managed identity options. Never put credentials in expressions.
 
 ## Error messages
 
@@ -437,7 +464,7 @@ Anything else is returned with the PowerShell error ID and details.
 - The catalog is built from `Get-Command -Module PnP.PowerShell` and cached in
   the user cache dir (`~/.cache/pnp-powershell-mcp-server/catalog.json`). It is
   rebuilt when the installed module version changes.
-- To pick up a newer module, call `pnpRefreshCmdlets` with `update: true`.
+- To pick up a newer module, call `pnpRefreshCmdlets` with `update: true` (you are asked to confirm, since it installs code from PSGallery).
 - Unknown-cmdlet errors trigger a background catalog rebuild.
 - Docs come from the `dev` branch of the PnP repo, so they may differ slightly
   from the installed version.
