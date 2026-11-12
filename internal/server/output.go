@@ -70,13 +70,13 @@ func compactJSON(s string) (string, bool) {
 
 func truncateArray(all []json.RawMessage, offset, total, limit int) string {
 	items := all[offset:]
-	budget := limit - 2 // brackets
+	budget := limit - 2
 	var kept []json.RawMessage
 	used := 0
 	for _, it := range items {
 		need := len(it)
 		if len(kept) > 0 {
-			need++ // comma
+			need++
 		}
 		if used+need > budget && len(kept) > 0 {
 			break

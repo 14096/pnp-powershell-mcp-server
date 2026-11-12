@@ -92,7 +92,12 @@ func TestNativePromptIsOptIn(t *testing.T) {
 
 func TestStructuredContent(t *testing.T) {
 	ctx := context.Background()
-	runner := &fakeRunner{res: pwsh.Result{Stdout: "[{\"Title\":\"A\"}]"}}
+	runner := &fakeRunner{fn: func(env map[string]string) pwsh.Result {
+		if strings.Contains(env[pwsh.EnvExpression], "Get-PnPWeb") {
+			return pwsh.Result{Stdout: `{"connected":true,"siteUrl":"https://contoso.sharepoint.com/sites/team","siteTitle":"Team site"}`}
+		}
+		return pwsh.Result{Stdout: `[{"Title":"A"}]`}
+	}}
 	cs := connect(t, newTestServer(t, "", runner), nil)
 
 	tools, err := cs.ListTools(ctx, nil)
@@ -104,8 +109,27 @@ func TestStructuredContent(t *testing.T) {
 			t.Errorf("%s has no output schema", tl.Name)
 		}
 	}
+	var hasConnectionCheck bool
+	for _, tl := range tools.Tools {
+		if tl.Name == "pnpTestConnection" {
+			hasConnectionCheck = true
+		}
+	}
+	if !hasConnectionCheck {
+		t.Error("pnpTestConnection tool was not registered")
+	}
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "pnpTestConnection",
+		Arguments: map[string]any{"siteUrl": "https://contoso.sharepoint.com/sites/team", "clientId": "app-id"},
+	})
+	if err != nil || res.IsError {
+		t.Fatalf("connection check failed: result=%v err=%v", res, err)
+	}
+	if sc, _ := res.StructuredContent.(map[string]any); sc["ok"] != true || sc["siteUrl"] != "https://contoso.sharepoint.com/sites/team" {
+		t.Errorf("connection check structured content: %v", res.StructuredContent)
+	}
 
-	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "pnpRunCmdlet", Arguments: map[string]any{"expression": "Get-PnPList | ConvertTo-Json"}})
+	res, err = cs.CallTool(ctx, &mcp.CallToolParams{Name: "pnpRunCmdlet", Arguments: map[string]any{"expression": "Get-PnPList | ConvertTo-Json"}})
 	if err != nil || res.IsError {
 		t.Fatalf("%v %v", res, err)
 	}

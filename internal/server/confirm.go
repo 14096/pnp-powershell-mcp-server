@@ -17,7 +17,6 @@ import (
 
 const confirmationTTL = 5 * time.Minute
 
-// action is a risky operation found in an expression by the run script.
 type action struct {
 	Command string `json:"command"`
 	Reason  string `json:"reason"`
@@ -42,7 +41,6 @@ func describe(actions []action) string {
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-// decision is the user's answer to a confirmation prompt.
 type decision int
 
 const (
@@ -51,10 +49,8 @@ const (
 	declined
 )
 
-// elicitKey identifies the confirmation prompt in MCP input requests/responses.
 const elicitKey = "confirm"
 
-// canElicit reports whether the client can show prompts to the user (MCP elicitation).
 func canElicit(req *mcp.CallToolRequest) bool {
 	if req == nil || req.Session == nil {
 		return false
@@ -63,8 +59,6 @@ func canElicit(req *mcp.CallToolRequest) bool {
 	return p != nil && p.Capabilities != nil && p.Capabilities.Elicitation != nil
 }
 
-// confirmationPrompt builds the prompt the client shows to the user itself, so
-// the question cannot be answered by the model.
 func confirmationPrompt(summary, expr string) *mcp.ElicitParams {
 	return &mcp.ElicitParams{
 		Mode:    "form",
@@ -83,8 +77,6 @@ func confirmationPrompt(summary, expr string) *mcp.ElicitParams {
 	}
 }
 
-// userDecision reads the user's answer from a retried call. The answer only
-// counts if the echoed request state was signed for this exact expression.
 func (s *Server) userDecision(req *mcp.CallToolRequest, expr string) decision {
 	if req == nil || req.Params == nil {
 		return noAnswer
@@ -99,16 +91,12 @@ func (s *Server) userDecision(req *mcp.CallToolRequest, expr string) decision {
 	return declined
 }
 
-// sign binds a request state to an expression with a per-process secret.
 func (s *Server) sign(expr string) string {
 	m := hmac.New(sha256.New, s.secret)
 	m.Write([]byte(expr))
 	return hex.EncodeToString(m.Sum(nil))
 }
 
-// tokens issues single-use, expiring confirmation tokens bound to one exact
-// expression. They are the fallback for clients without elicitation: the
-// assistant must ask the user in the conversation before presenting the token.
 type tokens struct {
 	mu      sync.Mutex
 	pending map[string]pendingToken
@@ -130,7 +118,7 @@ func (t *tokens) issue(expr string) string {
 	tok := hex.EncodeToString(b)
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	for k, v := range t.pending { // drop expired entries
+	for k, v := range t.pending {
 		if t.now().After(v.expires) {
 			delete(t.pending, k)
 		}
@@ -139,8 +127,6 @@ func (t *tokens) issue(expr string) string {
 	return tok
 }
 
-// redeem reports whether tok was issued for exactly expr and is still valid.
-// A token can be redeemed only once.
 func (t *tokens) redeem(tok, expr string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -152,13 +138,8 @@ func (t *tokens) redeem(tok, expr string) bool {
 	return t.now().Before(p.expires) && p.exprHash == sha256.Sum256([]byte(expr))
 }
 
-// elicitTimeout bounds how long a direct prompt may stay unanswered. Some
-// clients advertise elicitation but never show the prompt; waiting forever
-// would leave the tool call hanging.
 const elicitTimeout = 45 * time.Second
 
-// multiRoundTripVersion is the first protocol version where servers return
-// input requests instead of sending requests to the client mid-call.
 const multiRoundTripVersion = "2026-07-28"
 
 func protocolVersion(req *mcp.CallToolRequest) string {
@@ -178,7 +159,6 @@ func (s *Server) useMultiRoundTrip(req *mcp.CallToolRequest) bool {
 	return protocolVersion(req) >= multiRoundTripVersion
 }
 
-// sessionKey identifies the client session; requests without one (tests) share a key.
 func sessionKey(req *mcp.CallToolRequest) any {
 	if req == nil || req.Session == nil {
 		return struct{}{}
@@ -198,9 +178,6 @@ func (s *Server) canElicit(req *mcp.CallToolRequest) bool {
 	return s.elicitation && canElicit(req)
 }
 
-// askUser prompts the user directly (older protocol versions). An unanswered or
-// failed prompt returns noAnswer and disables prompting for the session, so
-// later calls go straight to the conversational fallback instead of waiting again.
 func (s *Server) askUser(ctx context.Context, req *mcp.CallToolRequest, p *mcp.ElicitParams) decision {
 	timeout := s.promptTimeout
 	if timeout == 0 {

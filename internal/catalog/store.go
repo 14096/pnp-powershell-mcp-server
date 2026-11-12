@@ -18,6 +18,7 @@ import (
 type Store struct {
 	runner    pwsh.Runner
 	cacheFile string
+	rebuildMu sync.Mutex
 
 	mu      sync.RWMutex
 	cat     *Catalog
@@ -128,6 +129,9 @@ func (s *Store) installedVersion(ctx context.Context) (string, error) {
 }
 
 func (s *Store) Rebuild(ctx context.Context) error {
+	s.rebuildMu.Lock()
+	defer s.rebuildMu.Unlock()
+
 	r, err := s.runner.Run(ctx, pwsh.CatalogScript, nil, 3*time.Minute)
 	if err != nil {
 		return err
@@ -152,8 +156,33 @@ func (s *Store) Rebuild(ctx context.Context) error {
 
 func (s *Store) writeCache(c *Catalog) {
 	b, err := json.Marshal(c)
-	if err != nil || os.MkdirAll(filepath.Dir(s.cacheFile), 0o700) != nil {
+	if err != nil {
 		return
 	}
-	_ = os.WriteFile(s.cacheFile, b, 0o600)
+	dir := filepath.Dir(s.cacheFile)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return
+	}
+	f, err := os.CreateTemp(dir, ".catalog-*.tmp")
+	if err != nil {
+		return
+	}
+	tempPath := f.Name()
+	defer os.Remove(tempPath)
+	if err := f.Chmod(0o600); err != nil {
+		_ = f.Close()
+		return
+	}
+	if _, err := f.Write(b); err != nil {
+		_ = f.Close()
+		return
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return
+	}
+	if err := f.Close(); err != nil {
+		return
+	}
+	_ = os.Rename(tempPath, s.cacheFile)
 }

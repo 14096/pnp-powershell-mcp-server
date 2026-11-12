@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -40,6 +41,11 @@ func fail(format string, args ...any) (*mcp.CallToolResult, any, error) {
 
 func resultWith(text string, out any) (*mcp.CallToolResult, any, error) {
 	r, _, _ := ok(text)
+	return r, out, nil
+}
+
+func resultWithError(text string, out any) (*mcp.CallToolResult, any, error) {
+	r, _, _ := result(text, true)
 	return r, out, nil
 }
 
@@ -102,6 +108,19 @@ type moduleOut struct {
 	CmdletCount       int       `json:"cmdletCount,omitempty"`
 	CatalogUpdatedAt  time.Time `json:"catalogUpdatedAt,omitempty"`
 	CatalogError      string    `json:"catalogError,omitempty"`
+}
+
+type connectionOut struct {
+	Ok        bool   `json:"ok" jsonschema:"true when the connection and site check succeeded"`
+	Connected bool   `json:"connected" jsonschema:"true when the site was reached successfully"`
+	SiteTitle string `json:"siteTitle,omitempty"`
+	SiteURL   string `json:"siteUrl,omitempty"`
+}
+
+type connectionArgs struct {
+	SiteURL  string `json:"siteUrl,omitempty" jsonschema:"HTTPS SharePoint site URL; optional when the server has --url configured"`
+	ClientID string `json:"clientId,omitempty" jsonschema:"Entra ID app client ID for interactive sign-in; omit when using a configured persisted connection or --url"`
+	Profile  string `json:"profile,omitempty" jsonschema:"configured persisted connection profile to use when connecting to siteUrl"`
 }
 
 type runArgs struct {
@@ -403,6 +422,84 @@ func (s *Server) moduleInfo(ctx context.Context, _ *mcp.CallToolRequest, _ struc
 	}
 	return resultWith(string(b), info)
 }
+
+const connectionProbe = `$web = Get-PnPWeb -Includes Title, Url
+[pscustomobject]@{
+  connected = $true
+  siteUrl = [string]$web.Url
+  siteTitle = [string]$web.Title
+} | ConvertTo-Json -Compress`
+
+func (s *Server) testConnection(ctx context.Context, req *mcp.CallToolRequest, a connectionArgs) (*mcp.CallToolResult, any, error) {
+	siteURL := strings.TrimSpace(a.SiteURL)
+	automatic := s.conn.URL != ""
+	if automatic {
+		if siteURL != "" && !sameSiteURL(siteURL, s.conn.URL) {
+			return resultWithError(tagError+"pnpTestConnection can only check the server's configured automatic connection; the requested site does not match --url.", connectionOut{})
+		}
+		if strings.TrimSpace(a.ClientID) != "" || strings.TrimSpace(a.Profile) != "" {
+			return resultWithError(tagError+"clientId and profile are not used with the server's automatic connection; omit them or unset --url.", connectionOut{})
+		}
+		siteURL = s.conn.URL
+	} else if siteURL == "" {
+		return resultWithError(tagError+"siteUrl is required unless the server was started with --url.", connectionOut{})
+	}
+	if !automatic && strings.TrimSpace(a.ClientID) != "" && strings.TrimSpace(a.Profile) != "" {
+		return resultWithError(tagError+"specify either clientId or profile, not both.", connectionOut{})
+	}
+	if err := validateSiteURL(siteURL); err != nil {
+		return resultWithError(tagError+err.Error(), connectionOut{})
+	}
+
+	expr := connectionProbe
+	if !automatic {
+		expr = "Connect-PnPOnline -Url " + psStringLiteral(siteURL) + " -Interactive"
+		if clientID := strings.TrimSpace(a.ClientID); clientID != "" {
+			expr += " -ClientId " + psStringLiteral(clientID)
+		}
+		expr += "\n" + connectionProbe
+	}
+
+	res, err := s.exec(ctx, req, expr, a.Profile, false, defaultTimeout)
+	if err != nil {
+		r, _, callErr := s.execFailure(err, defaultTimeout)
+		return r, connectionOut{}, callErr
+	}
+	if res.ExitCode != 0 {
+		return resultWithError(prettyError(res.ExitCode, res.Stderr), connectionOut{})
+	}
+	var out connectionOut
+	if err := json.Unmarshal([]byte(strings.TrimSpace(res.Stdout)), &out); err != nil {
+		return resultWithError(tagError+"connection check returned unexpected output: "+err.Error(), connectionOut{})
+	}
+	if !out.Connected || strings.TrimSpace(out.SiteURL) == "" {
+		return resultWithError(tagError+"PowerShell completed without confirming a SharePoint site connection.", connectionOut{})
+	}
+	out.Ok = true
+	message := fmt.Sprintf("Connected to SharePoint site.\nTitle: %s\nURL: %s", out.SiteTitle, out.SiteURL)
+	return resultWith(message, out)
+}
+
+func validateSiteURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || !strings.EqualFold(u.Scheme, "https") || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return fmt.Errorf("siteUrl must be an absolute HTTPS SharePoint URL without credentials, query, or fragment")
+	}
+	return nil
+}
+
+func sameSiteURL(a, b string) bool {
+	ua, errA := url.Parse(a)
+	ub, errB := url.Parse(b)
+	if errA != nil || errB != nil {
+		return false
+	}
+	return strings.EqualFold(ua.Scheme, ub.Scheme) &&
+		strings.EqualFold(ua.Host, ub.Host) &&
+		strings.TrimRight(ua.EscapedPath(), "/") == strings.TrimRight(ub.EscapedPath(), "/")
+}
+
+func psStringLiteral(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
 
 func (s *Server) execFailure(err error, timeout time.Duration) (*mcp.CallToolResult, any, error) {
 	s.log.Warn("PowerShell run failed", "error", err)

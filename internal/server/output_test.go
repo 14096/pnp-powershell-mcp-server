@@ -63,7 +63,7 @@ func TestFormatOutputTruncatesTextAtLine(t *testing.T) {
 }
 
 func TestFormatOutputKeepsUTF8Valid(t *testing.T) {
-	got := formatOutput(strings.Repeat("é", 500), 101) // 101 bytes splits a rune
+	got := formatOutput(strings.Repeat("é", 500), 101)
 	body, _, _ := strings.Cut(got, "\n\n[TRUNCATED]")
 	if strings.ContainsRune(body, '\uFFFD') {
 		t.Error("cut a multi-byte rune")

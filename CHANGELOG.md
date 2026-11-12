@@ -3,7 +3,10 @@
 All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.0.11] - 2026-11-12
+
+- New read-only tool `pnpTestConnection`: connects to a SharePoint site and reads its title and URL to verify access, without returning tokens or credentials. It uses the configured `--url` automatic connection, or takes `siteUrl` with either `clientId` or a persisted-connection `profile`.
+- Catalog rebuilds are now serialized, and the catalog cache file is written atomically (temporary file, then rename), so concurrent rebuilds no longer duplicate work or leave a partially written cache.
 
 ## [0.0.10] - 2026-10-25
 

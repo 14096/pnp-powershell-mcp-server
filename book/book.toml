@@ -1,0 +1,11 @@
+[book]
+title = "PnP.PowerShell MCP Server"
+authors = ["14096"]
+language = "en"
+src = "src"
+
+[build]
+build-dir = "build"
+
+[output.html]
+site-url = "/pnp-powershell-mcp-server/"

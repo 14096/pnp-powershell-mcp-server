@@ -9,7 +9,6 @@ import (
 	"time"
 )
 
-// configure makes cancellation kill pwsh and its whole process tree.
 func configure(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP}
 	cmd.Cancel = func() error {

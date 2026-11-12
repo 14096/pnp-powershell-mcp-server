@@ -2,7 +2,7 @@ BINARY := pnp-powershell-mcp-server
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -X main.version=$(VERSION)
 
-.PHONY: all clean tidy fmt vet lint check build run test install docker docker-run
+.PHONY: all clean tidy fmt vet lint check build run test install docker docker-run docs docs-serve
 
 all: build
 
@@ -40,3 +40,9 @@ docker:
 
 docker-run: docker
 	docker run -i --rm $(BINARY)
+
+docs:
+	mdbook build book
+
+docs-serve:
+	mdbook serve book --open

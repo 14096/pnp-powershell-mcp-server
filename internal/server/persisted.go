@@ -22,8 +22,6 @@ func normalizeTenant(t string) string {
 	return t
 }
 
-// ParsePersistedConnections parses a JSON array of {tenant, clientId, name?}, or
-// "@path" to read that JSON from a file. Empty input means no entries.
 func ParsePersistedConnections(spec string) ([]PersistedConnection, error) {
 	spec = strings.TrimSpace(spec)
 	if spec == "" {

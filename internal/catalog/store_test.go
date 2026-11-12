@@ -2,7 +2,10 @@ package catalog
 
 import (
 	"context"
+	"os"
 	"path/filepath"
+	"runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -48,6 +51,86 @@ func TestStoreRebuildErrors(t *testing.T) {
 	s := NewStore(runner, filepath.Join(t.TempDir(), "c.json"))
 	if err := s.Rebuild(context.Background()); err == nil {
 		t.Fatal("expected error when pwsh fails")
+	}
+}
+
+type gatedRunner struct {
+	stubRunner
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (g gatedRunner) Run(ctx context.Context, script string, env map[string]string, d time.Duration) (pwsh.Result, error) {
+	if script == pwsh.CatalogScript {
+		g.entered <- struct{}{}
+		<-g.release
+	}
+	return g.stubRunner.Run(ctx, script, env, d)
+}
+
+func TestStoreSerializesRebuilds(t *testing.T) {
+	runner := gatedRunner{
+		stubRunner: stubRunner{results: map[string]pwsh.Result{pwsh.CatalogScript: {Stdout: sample}}},
+		entered:    make(chan struct{}, 2),
+		release:    make(chan struct{}),
+	}
+	s := NewStore(runner, filepath.Join(t.TempDir(), "catalog.json"))
+
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(runner.release) }) }
+	defer release()
+
+	results := make(chan error, 2)
+	go func() { results <- s.Rebuild(context.Background()) }()
+	select {
+	case <-runner.entered:
+	case <-time.After(time.Second):
+		t.Fatal("first rebuild did not start")
+	}
+	go func() { results <- s.Rebuild(context.Background()) }()
+
+	select {
+	case <-runner.entered:
+		release()
+		<-results
+		<-results
+		t.Fatal("second rebuild started while the first was still running")
+	case <-time.After(30 * time.Millisecond):
+	}
+	release()
+	for range 2 {
+		if err := <-results; err != nil {
+			t.Fatalf("Rebuild() error = %v", err)
+		}
+	}
+}
+
+func TestWriteCacheAtomicallyReplacesCache(t *testing.T) {
+	cache := filepath.Join(t.TempDir(), "nested", "catalog.json")
+	s := NewStore(stubRunner{}, cache)
+	s.writeCache(&Catalog{Version: "1.0.0", Commands: []Cmdlet{{Name: "Get-PnPList"}}})
+	s.writeCache(&Catalog{Version: "2.0.0", Commands: []Cmdlet{{Name: "Get-PnPWeb"}}})
+
+	c, err := s.readCache()
+	if err != nil {
+		t.Fatalf("readCache() error = %v", err)
+	}
+	if c.Version != "2.0.0" || c.Commands[0].Name != "Get-PnPWeb" {
+		t.Fatalf("unexpected cached catalog: %+v", c)
+	}
+	info, err := os.Stat(cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Errorf("cache permissions = %o, want 600", info.Mode().Perm())
+	}
+	entries, err := os.ReadDir(filepath.Dir(cache))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "catalog.json" {
+		t.Errorf("temporary cache files were not cleaned up: %v", entries)
 	}
 }
 

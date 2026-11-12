@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Usage: release-notes.sh <tag> -> prints the CHANGELOG.md section for that tag.
 set -euo pipefail
 version="${1#v}"
 notes="$(awk -v v="$version" '

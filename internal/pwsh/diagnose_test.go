@@ -21,7 +21,7 @@ func TestDiagnose(t *testing.T) {
 	tests := []struct {
 		name    string
 		runner  fakeRunner
-		problem string // substring expected in Problems; empty = healthy
+		problem string
 	}{
 		{"healthy", fakeRunner{res: Result{Stdout: `{"psVersion":"7.6.4","moduleVersion":"3.4.1"}`}}, ""},
 		{"pwsh missing", fakeRunner{err: fmt.Errorf("%w: x", ErrNotFound)}, "not found in PATH"},

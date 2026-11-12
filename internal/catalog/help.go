@@ -22,7 +22,7 @@ func loadSynopses(path string) map[string]string {
 	)
 	for {
 		tok, err := dec.Token()
-		if err != nil { // io.EOF ends the document; other errors yield partial results
+		if err != nil {
 			return out
 		}
 		switch e := tok.(type) {

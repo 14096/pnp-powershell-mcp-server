@@ -146,7 +146,8 @@ doesn't match, check the client's MCP documentation.
 
 1. Connect once in a separate PowerShell 7 session (the token cache is reused):
    `Connect-PnPOnline -Url "https://<tenant>.sharepoint.com" -Interactive -ClientId "<app-id>"`
-2. Ask the assistant something like "list the lists on my site". It will use
+2. Ask the assistant to check the connection (`pnpTestConnection`), then something
+   like "list the lists on my site". It will use
    `pnpSearchCmdlets` -> `pnpGetCmdletDocs` -> `pnpRunCmdlet`.
 
 ## Local development
@@ -209,6 +210,7 @@ cmdlet search and docs; for real tenant access use the local binary.
 | `pnpRunCmdlet`      | Run an expression in a fresh `pwsh`; names are validated and risky operations need your confirmation (optional `profile` selects a persisted connection) |
 | `pnpRefreshCmdlets` | Rebuild the catalog; `update: true` installs the latest module first and needs your confirmation                                                         |
 | `pnpGetModuleInfo`  | Installed version, catalog status                                                                                                                        |
+| `pnpTestConnection` | Verify site access and report its title and URL; uses `--url` or accepts `siteUrl` with either a client ID or persisted profile                          |
 
 Recommended flow: search -> docs -> run.
 

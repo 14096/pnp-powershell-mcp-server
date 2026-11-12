@@ -120,6 +120,87 @@ func TestModuleInfo(t *testing.T) {
 	}
 }
 
+func TestTestConnection(t *testing.T) {
+	const probe = `{"connected":true,"siteUrl":"https://contoso.sharepoint.com/sites/team","siteTitle":"Team site"}`
+
+	t.Run("explicit site", func(t *testing.T) {
+		runner := &fakeRunner{res: pwsh.Result{Stdout: probe}}
+		s := newTestServer(t, "", runner)
+		r, result, err := s.testConnection(context.Background(), nil, connectionArgs{
+			SiteURL:  "https://contoso.sharepoint.com/sites/team",
+			ClientID: "app-id",
+		})
+		out, ok := result.(connectionOut)
+		if err != nil || r.IsError || !ok || !out.Ok || !out.Connected || out.SiteTitle != "Team site" {
+			t.Fatalf("unexpected result: result=%v out=%+v err=%v", r, result, err)
+		}
+		if !strings.Contains(runner.env[pwsh.EnvExpression], "Connect-PnPOnline -Url 'https://contoso.sharepoint.com/sites/team' -Interactive -ClientId 'app-id'") {
+			t.Errorf("connection expression missing or unsafe: %q", runner.env[pwsh.EnvExpression])
+		}
+		if runner.env[pwsh.EnvProfile] != "" {
+			t.Errorf("unexpected profile env = %q", runner.env[pwsh.EnvProfile])
+		}
+	})
+
+	t.Run("persisted profile", func(t *testing.T) {
+		runner := &fakeRunner{res: pwsh.Result{Stdout: probe}}
+		s := newTestServer(t, "", runner)
+		r, result, err := s.testConnection(context.Background(), nil, connectionArgs{
+			SiteURL: "https://contoso.sharepoint.com/sites/team",
+			Profile: "contoso-prod",
+		})
+		out, ok := result.(connectionOut)
+		if err != nil || r.IsError || !ok || !out.Ok {
+			t.Fatalf("unexpected result: result=%v out=%+v err=%v", r, result, err)
+		}
+		if runner.env[pwsh.EnvProfile] != "contoso-prod" {
+			t.Errorf("profile env = %q", runner.env[pwsh.EnvProfile])
+		}
+	})
+
+	t.Run("automatic site", func(t *testing.T) {
+		runner := &fakeRunner{res: pwsh.Result{Stdout: probe}}
+		s := newTestServer(t, "", runner)
+		s.conn = Connection{URL: "https://contoso.sharepoint.com/sites/team", ClientID: "app-id"}
+		r, result, err := s.testConnection(context.Background(), nil, connectionArgs{})
+		out, ok := result.(connectionOut)
+		if err != nil || r.IsError || !ok || !out.Ok {
+			t.Fatalf("unexpected result: result=%v out=%+v err=%v", r, result, err)
+		}
+		if strings.Contains(runner.env[pwsh.EnvExpression], "Connect-PnPOnline") || runner.env[pwsh.EnvConnectURL] != s.conn.URL {
+			t.Errorf("automatic connection was not used: env=%v", runner.env)
+		}
+	})
+
+	t.Run("does not test a different automatic site", func(t *testing.T) {
+		runner := &fakeRunner{}
+		s := newTestServer(t, "", runner)
+		s.conn = Connection{URL: "https://contoso.sharepoint.com/sites/team"}
+		r, result, err := s.testConnection(context.Background(), nil, connectionArgs{SiteURL: "https://fabrikam.sharepoint.com"})
+		if err != nil || !r.IsError || runner.env != nil {
+			t.Fatalf("unexpected result: result=%v out=%v env=%v err=%v", r, result, runner.env, err)
+		}
+	})
+
+	t.Run("requires a site when no automatic connection exists", func(t *testing.T) {
+		runner := &fakeRunner{}
+		s := newTestServer(t, "", runner)
+		r, _, err := s.testConnection(context.Background(), nil, connectionArgs{})
+		if err != nil || !r.IsError || runner.env != nil {
+			t.Fatalf("unexpected result: result=%v env=%v err=%v", r, runner.env, err)
+		}
+	})
+
+	t.Run("rejects non-HTTPS site URLs", func(t *testing.T) {
+		runner := &fakeRunner{}
+		s := newTestServer(t, "", runner)
+		r, _, err := s.testConnection(context.Background(), nil, connectionArgs{SiteURL: "http://contoso.sharepoint.com"})
+		if err != nil || !r.IsError || runner.env != nil {
+			t.Fatalf("unexpected result: result=%v env=%v err=%v", r, runner.env, err)
+		}
+	})
+}
+
 func TestRunCmdlet(t *testing.T) {
 	ctx := context.Background()
 

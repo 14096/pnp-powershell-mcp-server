@@ -18,7 +18,7 @@ import (
 )
 
 const instructions = "Run PnP.PowerShell cmdlets. Authentication is NOT managed: call Connect-PnPOnline beforehand. " +
-	"Workflow: pnpSearchCmdlets -> pnpGetCmdletDocs -> pnpRunCmdlet. Always check docs before using a cmdlet; " +
+	"Use pnpTestConnection to check access to a SharePoint site. Workflow: pnpSearchCmdlets -> pnpGetCmdletDocs -> pnpRunCmdlet. Always check docs before using a cmdlet; " +
 	"prefer ConvertTo-Json output. Risky operations (Remove-*, Clear-*, DELETE calls, privilege changes, local file or environment access, non-PnP commands, ...) require user confirmation: " +
 	"if pnpRunCmdlet returns [CONFIRMATION REQUIRED], show the user exactly what will happen, ask for an explicit yes/no in the conversation, " +
 	"and only after a clear yes call it again with the same expression and the confirmationToken. Never obtain or reuse a token without asking the user."
@@ -127,6 +127,12 @@ func (s *Server) MCP(version string) *mcp.Server {
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 		Description: "Show the installed PnP.PowerShell version and catalog status.",
 	}, guard[struct{}, moduleOut](s, "pnpGetModuleInfo", s.moduleInfo))
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "pnpTestConnection",
+		Title:       "Test SharePoint connection",
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
+		Description: "Connect to a SharePoint site and read its title and URL to verify access. Uses the configured automatic connection when --url is set; otherwise provide siteUrl and either clientId or a configured persisted connection/profile. Does not return credentials or tokens.",
+	}, guard[connectionArgs, connectionOut](s, "pnpTestConnection", s.testConnection))
 	s.addPromptsAndResources(srv)
 	return srv
 }
